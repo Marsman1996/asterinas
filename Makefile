@@ -112,7 +112,7 @@ CARGO_OSDK_COMMON_ARGS += --boot-method="$(BOOT_METHOD)"
 endif
 
 ifeq ($(COVERAGE), 1)
-CARGO_OSDK_ARGS += --coverage
+CARGO_OSDK_COMMON_ARGS += --coverage
 endif
 
 ifdef FEATURES

@@ -348,11 +348,10 @@ impl Bundle {
             }
         }
 
-        // Find the coverage data information in "qemu.log", and dump it if found.
+        // Dump coverage data information into coverage.mem.
+        let cov_path = config.work_dir.join("coverage.mem");
         if let Some(qemu_monitor_stream) = qemu_monitor_stream {
-            if let Ok(file) = std::fs::File::open(&qemu_log_path) {
-                crate::util::dump_coverage_from_qemu(file, qemu_monitor_stream);
-            }
+            crate::util::dump_coverage_from_qemu(&cov_path, qemu_monitor_stream);
         }
     }
 }

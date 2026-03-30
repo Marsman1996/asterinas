@@ -22,7 +22,7 @@ FEATURES ?=
 NO_DEFAULT_FEATURES ?= 0
 COVERAGE ?= 0
 # Specify whether to build regression tests under `test/initramfs/src/apps`.
-ENABLE_BASIC_TEST ?= false
+ENABLE_BASIC_TEST ?= true
 # Specify the primary system console (supported: tty0, ttyS0, hvc0).
 # - tty0: The active virtual terminal (VT).
 # - ttyS0: The serial (UART) terminal.

@@ -39,3 +39,11 @@ cachix.list
 
 # temporary configuration file for NixOS tests
 distro/etc_nixos/_config_for_test.nix
+
+.claude
+.github
+.opencode
+openspec
+test/initramfs/src/etc/tpm2-tss-static/*
+test/initramfs/src/etc/tpm2-tools-static/*
+test/initramfs/src/etc/tpm2-static/*

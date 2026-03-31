@@ -570,17 +570,19 @@ impl TpmChip {
     ///
     /// # Arguments
     /// * `context_blob` - The context blob to load
-    pub fn context_load(&self, context_blob: &[u8]) -> Result<(), TpmError> {
+    pub fn context_load(&self, context_blob: &[u8]) -> Result<u32, TpmError> {
         debug!("TPM: loading context of {} bytes", context_blob.len());
 
         let cmd = build_context_load_command(context_blob);
         let response = self.execute_command(&cmd)?;
 
-        // ContextLoad doesn't return a context blob, just success/failure
-        parse_context_load_response(&response)?;
+        let load_response = parse_context_load_response(&response)?;
 
-        debug!("TPM: context load successful");
-        Ok(())
+        debug!(
+            "TPM: context load successful, handle 0x{:08x}",
+            load_response.handle
+        );
+        Ok(load_response.handle)
     }
 
     /// Cleans up all resources managed by this chip.

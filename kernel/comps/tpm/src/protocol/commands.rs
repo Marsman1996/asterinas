@@ -504,19 +504,33 @@ pub fn parse_context_save_response(data: &[u8]) -> Result<Vec<u8>, TpmError> {
     Ok(context_blob)
 }
 
+/// Parsed ContextLoad response.
+#[derive(Debug)]
+pub struct ContextLoadResponse {
+    /// Loaded object or session handle.
+    pub handle: u32,
+}
+
 /// Parses a TPM2_ContextLoad response.
 ///
 /// # Arguments
 /// * `data` - Response buffer
 ///
 /// # Returns
-/// * Success indication (ContextLoad has no output parameters)
-pub fn parse_context_load_response(data: &[u8]) -> Result<(), TpmError> {
+/// * Loaded handle assigned by the TPM
+pub fn parse_context_load_response(data: &[u8]) -> Result<ContextLoadResponse, TpmError> {
     let header = TpmResponseHeader::from_bytes(data)?;
     if !header.is_success() {
         return Err(TpmError::Protocol(header.response_code));
     }
-    Ok(())
+
+    let body = response_body(data)?;
+    if body.len() < 4 {
+        return Err(TpmError::Buffer(BufferError::TooShort));
+    }
+
+    let handle = read_u32_be(body, 0)?;
+    Ok(ContextLoadResponse { handle })
 }
 
 /// Parses a PCR_Read response.

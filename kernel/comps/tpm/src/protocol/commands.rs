@@ -9,8 +9,8 @@ use crate::{
     protocol::{
         constants::{alg, capability, command, pcr, random, session, tag},
         header::{
-            TPM_HEADER_SIZE, TpmCommandHeader, TpmResponseHeader, read_u16_be, read_u32_be,
-            response_body, write_u16_be, write_u32_be,
+            read_u16_be, read_u32_be, response_body, write_u16_be, write_u32_be, TpmCommandHeader,
+            TpmResponseHeader, TPM_HEADER_SIZE,
         },
     },
 };
@@ -374,6 +374,53 @@ pub fn build_flush_context_command(flush_handle: u32) -> Vec<u8> {
     result
 }
 
+/// Builds a TPM2_ContextSave command buffer.
+///
+/// # Arguments
+/// * `save_handle` - Handle of the resource to save
+pub fn build_context_save_command(save_handle: u32) -> Vec<u8> {
+    let mut params = Vec::new();
+
+    // saveHandle (u32)
+    write_u32_be(&mut params, save_handle);
+
+    let total_size = TPM_HEADER_SIZE + params.len();
+    let header = TpmCommandHeader::new(
+        tag::TPM_ST_NO_SESSIONS,
+        total_size as u32,
+        command::TPM2_CONTEXT_SAVE,
+    );
+
+    let mut result = header.to_bytes();
+    result.extend_from_slice(&params);
+
+    result
+}
+
+/// Builds a TPM2_ContextLoad command buffer.
+///
+/// # Arguments
+/// * `context_blob` - The context blob to load
+pub fn build_context_load_command(context_blob: &[u8]) -> Vec<u8> {
+    let mut params = Vec::new();
+
+    // contextBlob (variable size buffer)
+    write_u32_be(&mut params, context_blob.len() as u32); // size of context blob
+    params.extend_from_slice(context_blob); // context blob contents
+
+    let total_size = TPM_HEADER_SIZE + params.len();
+    let header = TpmCommandHeader::new(
+        tag::TPM_ST_NO_SESSIONS,
+        total_size as u32,
+        command::TPM2_CONTEXT_LOAD,
+    );
+
+    let mut result = header.to_bytes();
+    result.extend_from_slice(&params);
+
+    result
+}
+
 /// Parsed StartAuthSession response.
 #[derive(Debug)]
 pub struct StartAuthSessionResponse {
@@ -417,6 +464,54 @@ pub fn parse_start_auth_session_response(
 
 /// Parses a FlushContext response (success only, no data).
 pub fn parse_flush_context_response(data: &[u8]) -> Result<(), TpmError> {
+    let header = TpmResponseHeader::from_bytes(data)?;
+    if !header.is_success() {
+        return Err(TpmError::Protocol(header.response_code));
+    }
+    Ok(())
+}
+
+/// Parses a TPM2_ContextSave response.
+///
+/// # Arguments
+/// * `data` - Response buffer
+///
+/// # Returns
+/// * `context_blob` - The context blob saved by the TPM
+pub fn parse_context_save_response(data: &[u8]) -> Result<Vec<u8>, TpmError> {
+    let header = TpmResponseHeader::from_bytes(data)?;
+    if !header.is_success() {
+        return Err(TpmError::Protocol(header.response_code));
+    }
+
+    // ContextSave response contains a variable-sized context blob
+    let body = response_body(data)?;
+
+    // Parse the size of the context blob (u32)
+    if body.len() < 4 {
+        return Err(TpmError::Buffer(BufferError::TooShort));
+    }
+    let context_blob_size = read_u32_be(body, 0)? as usize;
+
+    // Check if we have enough data for the context blob
+    if 4 + context_blob_size > body.len() {
+        return Err(TpmError::Buffer(BufferError::TooShort));
+    }
+
+    // Extract the context blob
+    let context_blob = body[4..4 + context_blob_size].to_vec();
+
+    Ok(context_blob)
+}
+
+/// Parses a TPM2_ContextLoad response.
+///
+/// # Arguments
+/// * `data` - Response buffer
+///
+/// # Returns
+/// * Success indication (ContextLoad has no output parameters)
+pub fn parse_context_load_response(data: &[u8]) -> Result<(), TpmError> {
     let header = TpmResponseHeader::from_bytes(data)?;
     if !header.is_success() {
         return Err(TpmError::Protocol(header.response_code));

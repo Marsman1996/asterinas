@@ -40,6 +40,10 @@ pub mod command {
     pub const TPM2_NV_WRITE: u32 = 0x00000137;
     /// TPM2_NV_DefineSpace command code.
     pub const TPM2_NV_DEFINE_SPACE: u32 = 0x0000012A;
+    /// TPM2_ContextSave command code.
+    pub const TPM2_CONTEXT_SAVE: u32 = 0x0000017C;
+    /// TPM2_ContextLoad command code.
+    pub const TPM2_CONTEXT_LOAD: u32 = 0x0000017D;
 }
 
 /// TPM 2.0 capability types.

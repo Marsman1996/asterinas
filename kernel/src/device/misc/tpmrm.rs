@@ -27,6 +27,18 @@ use crate::{
 
 /// Minor device number for TPM resource manager.
 const TPMRM_MINOR: u32 = 1;
+/// TPM2_CreatePrimary command code.
+const TPM2_CC_CREATE_PRIMARY: u32 = 0x0000_0131;
+/// TPM2_Load command code.
+const TPM2_CC_LOAD: u32 = 0x0000_0157;
+/// TPM2_StartAuthSession command code.
+const TPM2_CC_START_AUTH_SESSION: u32 = 0x0000_0176;
+/// TPM2_FlushContext command code.
+const TPM2_CC_FLUSH_CONTEXT: u32 = 0x0000_0165;
+/// Start of the transient object handle range.
+const TPM_TRANSIENT_HANDLE_START: u32 = 0x8000_0000;
+/// End of the transient object handle range.
+const TPM_TRANSIENT_HANDLE_END: u32 = 0x80FF_FFFF;
 
 /// Global TPM chip instance for resource manager.
 static TPMRM_CHIP: spin::Once<Arc<TpmChip>> = spin::Once::new();
@@ -195,6 +207,33 @@ impl TpmRmFile {
 
 impl Drop for TpmRmFile {
     fn drop(&mut self) {
+        if let Some(chip) = TPMRM_CHIP.get() {
+            for handle in self.space.session_handles() {
+                debug!(
+                    "TPM: flushing session 0x{:08x} from space {} on /dev/tpmrm0 close",
+                    handle,
+                    self.space.id()
+                );
+                if let Err(e) = chip.flush_context(handle) {
+                    warn!("TPM: failed to flush session 0x{:08x}: {:?}", handle, e);
+                }
+            }
+
+            for handle in self.space.object_handles() {
+                debug!(
+                    "TPM: flushing transient object 0x{:08x} from space {} on /dev/tpmrm0 close",
+                    handle,
+                    self.space.id()
+                );
+                if let Err(e) = chip.flush_context(handle) {
+                    warn!(
+                        "TPM: failed to flush transient object 0x{:08x}: {:?}",
+                        handle, e
+                    );
+                }
+            }
+        }
+
         // Dispose the space and clean up resources.
         debug!(
             "TPM: disposing space {} on /dev/tpmrm0 close",
@@ -278,7 +317,7 @@ impl InodeIo for TpmRmFile {
         // TPM2_StartAuthSession command code is 0x00000176
         if read_len >= 10 {
             let cmd_code = u32::from_be_bytes([cmd_buf[6], cmd_buf[7], cmd_buf[8], cmd_buf[9]]);
-            if cmd_code == 0x00000176 && response.len() >= 14 {
+            if cmd_code == TPM2_CC_START_AUTH_SESSION && response.len() >= 14 {
                 // Parse session handle from response (first 4 bytes of body)
                 let handle =
                     u32::from_be_bytes([response[10], response[11], response[12], response[13]]);
@@ -286,13 +325,24 @@ impl InodeIo for TpmRmFile {
                     self.space.track_session(handle);
                 }
             }
-            // Check if this was a FlushContext command and untrack the session handle.
-            // TPM2_FlushContext command code is 0x00000165
-            if cmd_code == 0x00000165 && read_len >= 14 {
+
+            if (cmd_code == TPM2_CC_CREATE_PRIMARY || cmd_code == TPM2_CC_LOAD)
+                && response.len() >= 14
+            {
+                let handle =
+                    u32::from_be_bytes([response[10], response[11], response[12], response[13]]);
+                if (TPM_TRANSIENT_HANDLE_START..=TPM_TRANSIENT_HANDLE_END).contains(&handle) {
+                    self.space.track_object(handle);
+                }
+            }
+
+            // Check if this was a FlushContext command and untrack the flushed handle.
+            if cmd_code == TPM2_CC_FLUSH_CONTEXT && read_len >= 14 {
                 // Parse handle from command (bytes 10-13)
                 let handle =
                     u32::from_be_bytes([cmd_buf[10], cmd_buf[11], cmd_buf[12], cmd_buf[13]]);
                 self.space.untrack_session(handle);
+                self.space.untrack_object(handle);
             }
         }
 

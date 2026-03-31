@@ -12,16 +12,17 @@ use crate::{
     error::{BufferError, TpmError},
     protocol::{
         commands::{
+            build_context_load_command, build_context_save_command, build_flush_context_command,
+            build_get_capability_command, build_get_random_command, build_nv_read_public_command,
+            build_pcr_read_command, build_policy_get_digest_command, build_policy_pcr_command,
+            build_start_auth_session_command, build_startup_command, parse_context_load_response,
+            parse_context_save_response, parse_flush_context_response,
+            parse_get_capability_response, parse_get_random_response, parse_pcr_read_response,
+            parse_policy_get_digest_response, parse_start_auth_session_response,
             GetCapabilityResponse, PcrReadResponse, StartAuthSessionResponse,
-            build_flush_context_command, build_get_capability_command, build_get_random_command,
-            build_nv_read_public_command, build_pcr_read_command, build_policy_get_digest_command,
-            build_policy_pcr_command, build_start_auth_session_command, build_startup_command,
-            parse_flush_context_response, parse_get_capability_response, parse_get_random_response,
-            parse_pcr_read_response, parse_policy_get_digest_response,
-            parse_start_auth_session_response,
         },
         constants::{alg, capability, handle, pcr, property, rc, session, startup, tag},
-        header::{TPM_HEADER_SIZE, TpmCommandHeader, TpmResponseHeader},
+        header::{TpmCommandHeader, TpmResponseHeader, TPM_HEADER_SIZE},
     },
     resource::{TpmResourceManager, TpmResourceType},
     session::{TpmSession, TpmSessionManager, TpmSessionType},
@@ -539,6 +540,46 @@ impl TpmChip {
         self.resource_manager.release_resource(flush_handle);
 
         info!("TPM: flushed context 0x{:08x}", flush_handle);
+        Ok(())
+    }
+
+    /// Saves a context (session or object) from the TPM.
+    ///
+    /// # Arguments
+    /// * `save_handle` - Handle of the resource to save
+    /// # Returns
+    /// * `context_blob` - The context blob saved by the TPM
+    pub fn context_save(&self, save_handle: u32) -> Result<Vec<u8>, TpmError> {
+        debug!("TPM: saving context 0x{:08x}", save_handle);
+
+        let cmd = build_context_save_command(save_handle);
+        let response = self.execute_command(&cmd)?;
+
+        // Parse the response to get the context blob
+        let context_blob = parse_context_save_response(&response)?;
+
+        debug!(
+            "TPM: saved context 0x{:08x}, blob size {} bytes",
+            save_handle,
+            context_blob.len()
+        );
+        Ok(context_blob)
+    }
+
+    /// Loads a context (session or object) into the TPM.
+    ///
+    /// # Arguments
+    /// * `context_blob` - The context blob to load
+    pub fn context_load(&self, context_blob: &[u8]) -> Result<(), TpmError> {
+        debug!("TPM: loading context of {} bytes", context_blob.len());
+
+        let cmd = build_context_load_command(context_blob);
+        let response = self.execute_command(&cmd)?;
+
+        // ContextLoad doesn't return a context blob, just success/failure
+        parse_context_load_response(&response)?;
+
+        debug!("TPM: context load successful");
         Ok(())
     }
 

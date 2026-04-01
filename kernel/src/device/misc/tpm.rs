@@ -22,11 +22,13 @@ use crate::{
         vfs::inode::InodeIo,
     },
     prelude::*,
-    process::signal::{PollHandle, Pollable},
+    process::signal::{PollHandle, Pollable, Pollee},
 };
 
 /// Minor device number for TPM devices.
 const TPM_MINOR: u32 = 0;
+/// Upper bound for a TPM command submitted through the character device.
+const MAX_TPM_COMMAND_SIZE: usize = 64 * 1024;
 
 /// Global TPM chip instance.
 static TPM_CHIP: spin::Once<Arc<TpmChip>> = spin::Once::new();
@@ -168,6 +170,8 @@ struct TpmFile {
     response_buffer: spin::Mutex<TpmResponseBuffer>,
     /// Session handles created through this file.
     sessions: spin::Mutex<alloc::collections::BTreeSet<u32>>,
+    /// Poll notification state for response-buffer transitions.
+    pollee: Pollee,
 }
 
 impl core::fmt::Debug for TpmFile {
@@ -181,6 +185,7 @@ impl TpmFile {
         Ok(Self {
             response_buffer: spin::Mutex::new(TpmResponseBuffer::new()),
             sessions: spin::Mutex::new(alloc::collections::BTreeSet::new()),
+            pollee: Pollee::new(),
         })
     }
 
@@ -203,6 +208,53 @@ impl TpmFile {
         }
         self.sessions.lock().clear();
     }
+
+    /// Returns the currently available I/O events.
+    fn check_io_events(&self) -> IoEvents {
+        let mut events = IoEvents::OUT;
+        if self.response_buffer.lock().remaining() > 0 {
+            events |= IoEvents::IN;
+        }
+        events
+    }
+
+    /// Clears any buffered TPM response and invalidates readable events if needed.
+    fn clear_response(&self) {
+        let mut response = self.response_buffer.lock();
+        let had_bytes = response.remaining() > 0;
+        response.clear();
+        drop(response);
+
+        if had_bytes {
+            self.pollee.invalidate();
+        }
+    }
+
+    /// Stores a new TPM response and wakes readers.
+    fn store_response(&self, data: Vec<u8>) {
+        self.response_buffer.lock().set_response(data);
+        self.pollee.notify(IoEvents::IN);
+    }
+
+    /// Attempts to read bytes from the buffered TPM response.
+    fn try_read_response(&self, writer: &mut VmWriter) -> Result<usize> {
+        let mut response = self.response_buffer.lock();
+        if response.remaining() == 0 {
+            return_errno_with_message!(Errno::EAGAIN, "no TPM response available");
+        }
+
+        let read_len = response.read_partial(writer)?;
+        let has_remaining = response.remaining() > 0;
+        drop(response);
+
+        if has_remaining {
+            self.pollee.notify(IoEvents::IN);
+        } else {
+            self.pollee.invalidate();
+        }
+
+        Ok(read_len)
+    }
 }
 
 impl Drop for TpmFile {
@@ -212,15 +264,9 @@ impl Drop for TpmFile {
 }
 
 impl Pollable for TpmFile {
-    fn poll(&self, mask: IoEvents, _poller: Option<&mut PollHandle>) -> IoEvents {
-        let mut events = IoEvents::OUT; // Always writable (can accept new commands)
-
-        // Check if there are unread response bytes.
-        if self.response_buffer.lock().remaining() > 0 {
-            events |= IoEvents::IN;
-        }
-
-        events & mask
+    fn poll(&self, mask: IoEvents, poller: Option<&mut PollHandle>) -> IoEvents {
+        self.pollee
+            .poll_with(mask, poller, || self.check_io_events())
     }
 }
 
@@ -229,11 +275,17 @@ impl InodeIo for TpmFile {
         &self,
         _offset: usize,
         writer: &mut VmWriter,
-        _status_flags: StatusFlags,
+        status_flags: StatusFlags,
     ) -> Result<usize> {
-        let mut response = self.response_buffer.lock();
-        let read_len = response.read_partial(writer)?;
-        Ok(read_len)
+        if writer.avail() == 0 {
+            return Ok(0);
+        }
+
+        if status_flags.contains(StatusFlags::O_NONBLOCK) {
+            self.try_read_response(writer)
+        } else {
+            self.wait_events(IoEvents::IN, None, || self.try_read_response(writer))
+        }
     }
 
     fn write_at(
@@ -247,7 +299,14 @@ impl InodeIo for TpmFile {
             .ok_or_else(|| Error::with_message(Errno::ENODEV, "No TPM chip registered"))?;
 
         // Clear previous response before new command.
-        self.response_buffer.lock().clear();
+        self.clear_response();
+
+        if reader.remain() > MAX_TPM_COMMAND_SIZE {
+            return Err(Error::with_message(
+                Errno::EMSGSIZE,
+                "TPM command exceeds the supported size limit",
+            ));
+        }
 
         // Read command buffer from userspace.
         let mut cmd_buf = alloc::vec![0u8; reader.remain()];
@@ -284,7 +343,7 @@ impl InodeIo for TpmFile {
 
         // Store response for subsequent read.
         debug!("TPM: storing {} byte response", response.len());
-        self.response_buffer.lock().set_response(response);
+        self.store_response(response);
 
         Ok(read_len)
     }

@@ -19,12 +19,12 @@ use crate::{
             parse_context_save_response, parse_flush_context_response,
             parse_get_capability_response, parse_get_random_response, parse_pcr_read_response,
             parse_policy_get_digest_response, parse_start_auth_session_response,
-            GetCapabilityResponse, PcrReadResponse, StartAuthSessionResponse,
+            ContextLoadResponse, GetCapabilityResponse, PcrReadResponse, StartAuthSessionResponse,
         },
         constants::{alg, capability, handle, pcr, property, rc, session, startup, tag},
         header::{TpmCommandHeader, TpmResponseHeader, TPM_HEADER_SIZE},
     },
-    resource::{TpmResourceManager, TpmResourceType},
+    resource::{TpmResource, TpmResourceManager, TpmResourceType},
     session::{TpmSession, TpmSessionManager, TpmSessionType},
     space::TpmSpace,
     transport::TpmTransport,
@@ -68,6 +68,7 @@ pub struct TpmChip {
 }
 
 const TPM2_CC_CREATE_PRIMARY: u32 = 0x0000_0131;
+const TPM2_CC_EVICT_CONTROL: u32 = 0x0000_0120;
 const TPM2_CC_CREATE: u32 = 0x0000_0153;
 const TPM2_CC_HMAC: u32 = 0x0000_0155;
 const TPM2_CC_LOAD: u32 = 0x0000_0157;
@@ -499,9 +500,17 @@ impl TpmChip {
             session.auth_mut().nonce_tpm = session_response.nonce_tpm.clone();
             self.session_manager.add_session(session);
 
-            // Also track as a resource
-            self.resource_manager
-                .create_resource(session_type_enum.resource_type(), alloc::vec![]);
+            // Track the real TPM session handle so `flush_context` can release
+            // the same resource entry it later looks up by handle.
+            self.resource_manager.insert_resource(TpmResource {
+                handle: session_response.handle,
+                resource_type: session_type_enum.resource_type(),
+                data: alloc::vec![],
+                public_area: None,
+                private_area: None,
+                name: None,
+                last_used: 0,
+            });
 
             info!(
                 "TPM: started auth session with handle 0x{:08x}",
@@ -649,13 +658,21 @@ impl TpmChip {
         (cmd.len() >= TPM_HEADER_SIZE).then(|| u32::from_be_bytes([cmd[6], cmd[7], cmd[8], cmd[9]]))
     }
 
-    fn command_first_handle(cmd: &[u8]) -> Option<u32> {
-        (cmd.len() >= TPM_HEADER_SIZE + 4)
-            .then(|| u32::from_be_bytes([cmd[10], cmd[11], cmd[12], cmd[13]]))
+    fn command_handle(cmd: &[u8], handle_index: usize) -> Option<u32> {
+        let offset = TPM_HEADER_SIZE.checked_add(handle_index.checked_mul(4)?)?;
+        (cmd.len() >= offset + 4).then(|| {
+            u32::from_be_bytes([
+                cmd[offset],
+                cmd[offset + 1],
+                cmd[offset + 2],
+                cmd[offset + 3],
+            ])
+        })
     }
 
-    fn rewrite_first_handle(cmd: &mut [u8], remapped_handle: u32) {
-        cmd[10..14].copy_from_slice(&remapped_handle.to_be_bytes());
+    fn rewrite_handle(cmd: &mut [u8], handle_index: usize, remapped_handle: u32) {
+        let offset = TPM_HEADER_SIZE + handle_index * 4;
+        cmd[offset..offset + 4].copy_from_slice(&remapped_handle.to_be_bytes());
     }
 
     fn context_load_saved_handle(cmd: &[u8]) -> Option<u32> {
@@ -663,20 +680,19 @@ impl TpmChip {
             .then(|| u32::from_be_bytes([cmd[18], cmd[19], cmd[20], cmd[21]]))
     }
 
-    fn command_uses_space_handle(command_code: u32) -> bool {
-        matches!(
-            command_code,
+    fn command_handle_indexes(command_code: u32) -> &'static [usize] {
+        match command_code {
             TPM2_CC_CREATE
-                | TPM2_CC_HMAC
-                | TPM2_CC_LOAD
-                | TPM2_CC_NV_READ
-                | TPM2_CC_NV_WRITE
-                | TPM2_CC_CONTEXT_SAVE
-                | TPM2_CC_FLUSH_CONTEXT
-                | TPM2_CC_POLICY_COMMAND_CODE
-                | TPM2_CC_READ_PUBLIC
-                | TPM2_CC_POLICY_GET_DIGEST
-        )
+            | TPM2_CC_HMAC
+            | TPM2_CC_LOAD
+            | TPM2_CC_CONTEXT_SAVE
+            | TPM2_CC_FLUSH_CONTEXT
+            | TPM2_CC_POLICY_COMMAND_CODE
+            | TPM2_CC_READ_PUBLIC
+            | TPM2_CC_POLICY_GET_DIGEST => &[0],
+            TPM2_CC_EVICT_CONTROL | TPM2_CC_NV_READ | TPM2_CC_NV_WRITE => &[1],
+            _ => &[],
+        }
     }
 
     fn is_tracked_object(space: &TpmSpace, logical_handle: u32) -> bool {
@@ -711,23 +727,26 @@ impl TpmChip {
             return Ok(BTreeMap::new());
         };
 
-        if !Self::command_uses_space_handle(command_code) {
-            return Ok(BTreeMap::new());
-        }
-
-        let Some(logical_handle) = Self::command_first_handle(cmd) else {
-            return Ok(BTreeMap::new());
-        };
-
-        if !Self::is_tracked_object(space, logical_handle) {
+        let handle_indexes = Self::command_handle_indexes(command_code);
+        if handle_indexes.is_empty() {
             return Ok(BTreeMap::new());
         }
 
         let mut loaded_handles = BTreeMap::new();
-        if let Some(context_blob) = space.resource_manager().get_context_blob(logical_handle) {
-            let real_handle = self.context_load(&context_blob)?;
-            Self::rewrite_first_handle(cmd, real_handle);
-            loaded_handles.insert(logical_handle, real_handle);
+        for &handle_index in handle_indexes {
+            let Some(logical_handle) = Self::command_handle(cmd, handle_index) else {
+                continue;
+            };
+
+            if !Self::is_tracked_object(space, logical_handle) {
+                continue;
+            }
+
+            if let Some(context_blob) = space.resource_manager().get_context_blob(logical_handle) {
+                let real_handle = self.context_load(&context_blob)?;
+                Self::rewrite_handle(cmd, handle_index, real_handle);
+                loaded_handles.insert(logical_handle, real_handle);
+            }
         }
 
         Ok(loaded_handles)
@@ -760,7 +779,7 @@ impl TpmChip {
         translated_handles: &BTreeMap<u32, u32>,
         response: &[u8],
     ) -> Result<(), TpmError> {
-        let Some(logical_handle) = Self::command_first_handle(original_cmd) else {
+        let Some(logical_handle) = Self::command_handle(original_cmd, 0) else {
             return Ok(());
         };
 
@@ -786,23 +805,52 @@ impl TpmChip {
     }
 
     fn commit_flush_context(&self, space: &TpmSpace, original_cmd: &[u8]) {
-        if let Some(logical_handle) = Self::command_first_handle(original_cmd) {
+        if let Some(logical_handle) = Self::command_handle(original_cmd, 0) {
             space.resource_manager().remove_context_blob(logical_handle);
         }
     }
 
-    fn commit_context_load(&self, space: &TpmSpace, original_cmd: &[u8]) {
+    fn commit_context_load(
+        &self,
+        space: &TpmSpace,
+        original_cmd: &[u8],
+        response: &[u8],
+    ) -> Result<(), TpmError> {
         let Some(saved_handle) = Self::context_load_saved_handle(original_cmd) else {
-            return;
+            return Ok(());
+        };
+        let ContextLoadResponse {
+            handle: loaded_handle,
+        } = parse_context_load_response(response)?;
+
+        let Some(resource_type) = TpmResourceType::from_handle(loaded_handle) else {
+            return Ok(());
         };
 
-        // An explicit `ContextLoad` means userspace has already materialized the
-        // object or session back into the TPM. Keep it in the live set for this
-        // file descriptor, and consume the saved blob so later commands on the
-        // same fd do not perform a second implicit `ContextLoad`.
-        space.resource_manager().remove_context_blob(saved_handle);
-        space.untrack_object(saved_handle);
-        space.untrack_session(saved_handle);
+        match resource_type {
+            TpmResourceType::Key => {
+                // Keep explicitly loaded objects alive for the lifetime of the
+                // current file descriptor so follow-up commands on the same
+                // ESYS context can use the returned transient handle directly.
+                // Consume the old saved blob to avoid a second implicit
+                // `ContextLoad` on the same fd.
+                space.resource_manager().remove_context_blob(saved_handle);
+                space.untrack_object(saved_handle);
+                space.track_object(loaded_handle);
+            }
+            TpmResourceType::HmacSession | TpmResourceType::PolicySession => {
+                // Sessions must stay loaded after an explicit `ContextLoad`;
+                // otherwise auth commands immediately fail with
+                // "session not loaded". Consume any old saved blob to avoid a
+                // second implicit `ContextLoad` on the same file descriptor.
+                space.resource_manager().remove_context_blob(saved_handle);
+                space.untrack_session(saved_handle);
+                space.track_session(loaded_handle);
+            }
+            _ => {}
+        }
+
+        Ok(())
     }
 
     pub fn close_space(&self, space: &TpmSpace) {
@@ -899,10 +947,7 @@ impl TpmChip {
             TPM2_CC_CONTEXT_SAVE => {
                 self.commit_context_save(space, cmd, &translated_handles, &response)
             }
-            TPM2_CC_CONTEXT_LOAD => {
-                self.commit_context_load(space, cmd);
-                Ok(())
-            }
+            TPM2_CC_CONTEXT_LOAD => self.commit_context_load(space, cmd, &response),
             TPM2_CC_FLUSH_CONTEXT => {
                 self.commit_flush_context(space, cmd);
                 Ok(())

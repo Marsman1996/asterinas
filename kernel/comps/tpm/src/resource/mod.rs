@@ -262,8 +262,8 @@ pub struct TpmResourceManager {
     next_handle: Mutex<TpmResourceHandle>,
     /// Handle virtualizer for userspace handle translation.
     handle_virtualizer: HandleVirtualizer,
-    /// Stored context blobs for objects and sessions that have been evicted.
-    context_blobs: Mutex<BTreeMap<TpmResourceHandle, (Vec<u8>, Vec<u8>, Vec<u8>)>>,
+    /// Stored TPM2_ContextSave blobs keyed by the logical handle visible to the space.
+    context_blobs: Mutex<BTreeMap<TpmResourceHandle, Vec<u8>>>,
 }
 
 impl core::fmt::Debug for TpmResourceManager {
@@ -408,37 +408,30 @@ impl TpmResourceManager {
     ///
     /// This is used by TPM2_ContextSave to store the context blob
     /// so it can be later restored by TPM2_ContextLoad.
-    pub fn store_context_blob(
-        &self,
-        handle: TpmResourceHandle,
-        context_blob: (Vec<u8>, Vec<u8>, Vec<u8>),
-    ) {
+    pub fn store_context_blob(&self, logical_handle: TpmResourceHandle, context_blob: Vec<u8>) {
         let mut blobs = self.context_blobs.lock();
-        blobs.insert(handle, context_blob);
-        debug!("TPM: stored context blob for handle 0x{:08x}", handle);
+        blobs.insert(logical_handle, context_blob);
+        debug!(
+            "TPM: stored context blob for logical handle 0x{:08x}",
+            logical_handle
+        );
     }
 
     /// Retrieves a stored context blob for a resource.
     ///
     /// This is used by TPM2_ContextLoad to retrieve the context blob
     /// that was previously stored by TPM2_ContextSave.
-    pub fn get_context_blob(
-        &self,
-        handle: TpmResourceHandle,
-    ) -> Option<(Vec<u8>, Vec<u8>, Vec<u8>)> {
+    pub fn get_context_blob(&self, logical_handle: TpmResourceHandle) -> Option<Vec<u8>> {
         let blobs = self.context_blobs.lock();
-        blobs.get(&handle).cloned()
+        blobs.get(&logical_handle).cloned()
     }
 
     /// Removes a stored context blob after it has been used.
     ///
     /// This prevents accumulation of unused context blobs.
-    pub fn remove_context_blob(
-        &self,
-        handle: TpmResourceHandle,
-    ) -> Option<(Vec<u8>, Vec<u8>, Vec<u8>)> {
+    pub fn remove_context_blob(&self, logical_handle: TpmResourceHandle) -> Option<Vec<u8>> {
         let mut blobs = self.context_blobs.lock();
-        blobs.remove(&handle)
+        blobs.remove(&logical_handle)
     }
 
     /// Releases a resource by handle.
@@ -520,6 +513,8 @@ impl TpmResourceManager {
         let mut resources = self.resources.lock();
         let count = resources.len();
         resources.clear();
+        self.context_blobs.lock().clear();
+        self.handle_virtualizer.clear_all();
         if count > 0 {
             info!("TPM: cleared {} resources", count);
         }

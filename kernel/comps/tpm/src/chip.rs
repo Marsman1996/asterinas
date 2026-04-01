@@ -2,7 +2,7 @@
 
 //! TPM chip abstraction.
 
-use alloc::{boxed::Box, vec::Vec};
+use alloc::{boxed::Box, collections::BTreeMap, vec::Vec};
 use core::sync::atomic::{AtomicU8, Ordering};
 
 use log::{debug, info, warn};
@@ -66,6 +66,19 @@ pub struct TpmChip {
     /// Session manager for tracking active sessions.
     session_manager: TpmSessionManager,
 }
+
+const TPM2_CC_CREATE_PRIMARY: u32 = 0x0000_0131;
+const TPM2_CC_CREATE: u32 = 0x0000_0153;
+const TPM2_CC_HMAC: u32 = 0x0000_0155;
+const TPM2_CC_LOAD: u32 = 0x0000_0157;
+const TPM2_CC_NV_READ: u32 = 0x0000_014E;
+const TPM2_CC_NV_WRITE: u32 = 0x0000_0137;
+const TPM2_CC_CONTEXT_SAVE: u32 = 0x0000_0162;
+const TPM2_CC_FLUSH_CONTEXT: u32 = 0x0000_0165;
+const TPM2_CC_POLICY_COMMAND_CODE: u32 = 0x0000_016C;
+const TPM2_CC_READ_PUBLIC: u32 = 0x0000_0173;
+const TPM2_CC_POLICY_GET_DIGEST: u32 = 0x0000_0189;
+const TPM2_CC_CONTEXT_LOAD: u32 = 0x0000_0161;
 
 impl core::fmt::Debug for TpmChip {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -632,6 +645,202 @@ impl TpmChip {
         self.execute_command_expect_success(&cmd)
     }
 
+    fn command_code(cmd: &[u8]) -> Option<u32> {
+        (cmd.len() >= TPM_HEADER_SIZE).then(|| u32::from_be_bytes([cmd[6], cmd[7], cmd[8], cmd[9]]))
+    }
+
+    fn command_first_handle(cmd: &[u8]) -> Option<u32> {
+        (cmd.len() >= TPM_HEADER_SIZE + 4)
+            .then(|| u32::from_be_bytes([cmd[10], cmd[11], cmd[12], cmd[13]]))
+    }
+
+    fn rewrite_first_handle(cmd: &mut [u8], remapped_handle: u32) {
+        cmd[10..14].copy_from_slice(&remapped_handle.to_be_bytes());
+    }
+
+    fn command_uses_space_handle(command_code: u32) -> bool {
+        matches!(
+            command_code,
+            TPM2_CC_CREATE
+                | TPM2_CC_HMAC
+                | TPM2_CC_LOAD
+                | TPM2_CC_NV_READ
+                | TPM2_CC_NV_WRITE
+                | TPM2_CC_CONTEXT_SAVE
+                | TPM2_CC_FLUSH_CONTEXT
+                | TPM2_CC_POLICY_COMMAND_CODE
+                | TPM2_CC_READ_PUBLIC
+                | TPM2_CC_POLICY_GET_DIGEST
+        )
+    }
+
+    fn is_tracked_object(space: &TpmSpace, logical_handle: u32) -> bool {
+        space.object_handles().contains(&logical_handle)
+    }
+
+    fn store_and_maybe_flush_context(
+        &self,
+        space: &TpmSpace,
+        logical_handle: u32,
+        real_handle: u32,
+        resource_type: TpmResourceType,
+        context_blob: Vec<u8>,
+    ) -> Result<(), TpmError> {
+        space
+            .resource_manager()
+            .store_context_blob(logical_handle, context_blob);
+
+        if matches!(resource_type, TpmResourceType::Key) {
+            self.flush_context(real_handle)?;
+        }
+
+        Ok(())
+    }
+
+    fn prepare_space(
+        &self,
+        cmd: &mut [u8],
+        space: &TpmSpace,
+    ) -> Result<BTreeMap<u32, u32>, TpmError> {
+        let Some(command_code) = Self::command_code(cmd) else {
+            return Ok(BTreeMap::new());
+        };
+
+        if !Self::command_uses_space_handle(command_code) {
+            return Ok(BTreeMap::new());
+        }
+
+        let Some(logical_handle) = Self::command_first_handle(cmd) else {
+            return Ok(BTreeMap::new());
+        };
+
+        if !Self::is_tracked_object(space, logical_handle) {
+            return Ok(BTreeMap::new());
+        }
+
+        let mut loaded_handles = BTreeMap::new();
+        if let Some(context_blob) = space.resource_manager().get_context_blob(logical_handle) {
+            let real_handle = self.context_load(&context_blob)?;
+            Self::rewrite_first_handle(cmd, real_handle);
+            loaded_handles.insert(logical_handle, real_handle);
+        }
+
+        Ok(loaded_handles)
+    }
+
+    fn commit_prepared_handles(
+        &self,
+        space: &TpmSpace,
+        loaded_handles: &BTreeMap<u32, u32>,
+    ) -> Result<(), TpmError> {
+        for (&logical_handle, &real_handle) in loaded_handles {
+            let context_blob = self.context_save(real_handle)?;
+            let resource_type = TpmResourceType::Key;
+            self.store_and_maybe_flush_context(
+                space,
+                logical_handle,
+                real_handle,
+                resource_type,
+                context_blob,
+            )?;
+        }
+
+        Ok(())
+    }
+
+    fn commit_context_save(
+        &self,
+        space: &TpmSpace,
+        original_cmd: &[u8],
+        translated_handles: &BTreeMap<u32, u32>,
+        response: &[u8],
+    ) -> Result<(), TpmError> {
+        let Some(logical_handle) = Self::command_first_handle(original_cmd) else {
+            return Ok(());
+        };
+
+        let context_blob = parse_context_save_response(response)?;
+        space
+            .resource_manager()
+            .store_context_blob(logical_handle, context_blob);
+        debug!(
+            "TPM: stored explicit context-save blob for handle 0x{:08x} in space {}",
+            logical_handle,
+            space.id()
+        );
+
+        if Self::is_tracked_object(space, logical_handle) {
+            let real_handle = translated_handles
+                .get(&logical_handle)
+                .copied()
+                .unwrap_or(logical_handle);
+            self.flush_context(real_handle)?;
+        }
+
+        Ok(())
+    }
+
+    fn commit_flush_context(&self, space: &TpmSpace, original_cmd: &[u8]) {
+        if let Some(logical_handle) = Self::command_first_handle(original_cmd) {
+            space.resource_manager().remove_context_blob(logical_handle);
+        }
+    }
+
+    pub fn close_space(&self, space: &TpmSpace) {
+        for logical_handle in space.object_handles() {
+            if space
+                .resource_manager()
+                .get_context_blob(logical_handle)
+                .is_some()
+            {
+                continue;
+            }
+
+            match self.context_save(logical_handle) {
+                Ok(context_blob) => {
+                    space
+                        .resource_manager()
+                        .store_context_blob(logical_handle, context_blob);
+                    if let Err(err) = self.flush_context(logical_handle) {
+                        warn!(
+                            "TPM: failed to flush object 0x{:08x} while closing space {}: {:?}",
+                            logical_handle,
+                            space.id(),
+                            err
+                        );
+                    }
+                }
+                Err(err) => {
+                    warn!(
+                        "TPM: failed to save object 0x{:08x} while closing space {}: {:?}",
+                        logical_handle,
+                        space.id(),
+                        err
+                    );
+                }
+            }
+        }
+
+        for logical_handle in space.session_handles() {
+            if space
+                .resource_manager()
+                .get_context_blob(logical_handle)
+                .is_some()
+            {
+                continue;
+            }
+
+            if let Err(err) = self.flush_context(logical_handle) {
+                warn!(
+                    "TPM: failed to flush session 0x{:08x} while closing space {}: {:?}",
+                    logical_handle,
+                    space.id(),
+                    err
+                );
+            }
+        }
+    }
+
     /// Executes a command within a specific TPM space.
     ///
     /// This allows resource-isolated command execution where
@@ -646,12 +855,48 @@ impl TpmChip {
     pub fn execute_command_in_space(
         &self,
         cmd: &[u8],
-        _space: &TpmSpace,
+        space: &TpmSpace,
     ) -> Result<Vec<u8>, TpmError> {
-        // For now, space-aware execution delegates to regular execution.
-        // Future iterations may add session handling and resource tracking.
         debug!("TPM: executing command in space context");
-        self.execute_command(cmd)
+
+        let mut translated_cmd = cmd.to_vec();
+        let command_code = Self::command_code(cmd).unwrap_or(0);
+        let translated_handles = self.prepare_space(&mut translated_cmd, space)?;
+        let response = match self.execute_command(&translated_cmd) {
+            Ok(response) => response,
+            Err(err) => {
+                if let Err(commit_err) = self.commit_prepared_handles(space, &translated_handles) {
+                    warn!(
+                        "TPM: failed to restore prepared handles after command error in space {}: {:?}",
+                        space.id(),
+                        commit_err
+                    );
+                }
+                return Err(err);
+            }
+        };
+
+        let commit_result = match command_code {
+            TPM2_CC_CONTEXT_SAVE => {
+                self.commit_context_save(space, cmd, &translated_handles, &response)
+            }
+            TPM2_CC_FLUSH_CONTEXT => {
+                self.commit_flush_context(space, cmd);
+                Ok(())
+            }
+            _ => self.commit_prepared_handles(space, &translated_handles),
+        };
+
+        if let Err(err) = commit_result {
+            warn!(
+                "TPM: failed to commit space {} after command 0x{:08x}: {:?}",
+                space.id(),
+                command_code,
+                err
+            );
+        }
+
+        Ok(response)
     }
 }
 

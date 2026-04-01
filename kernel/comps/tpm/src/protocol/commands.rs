@@ -404,9 +404,8 @@ pub fn build_context_save_command(save_handle: u32) -> Vec<u8> {
 pub fn build_context_load_command(context_blob: &[u8]) -> Vec<u8> {
     let mut params = Vec::new();
 
-    // contextBlob (variable size buffer)
-    write_u32_be(&mut params, context_blob.len() as u32); // size of context blob
-    params.extend_from_slice(context_blob); // context blob contents
+    // ContextLoad takes a raw `TPMS_CONTEXT` body with no outer size prefix.
+    params.extend_from_slice(context_blob);
 
     let total_size = TPM_HEADER_SIZE + params.len();
     let header = TpmCommandHeader::new(
@@ -484,24 +483,24 @@ pub fn parse_context_save_response(data: &[u8]) -> Result<Vec<u8>, TpmError> {
         return Err(TpmError::Protocol(header.response_code));
     }
 
-    // ContextSave response contains a variable-sized context blob
     let body = response_body(data)?;
 
-    // Parse the size of the context blob (u32)
-    if body.len() < 4 {
-        return Err(TpmError::Buffer(BufferError::TooShort));
-    }
-    let context_blob_size = read_u32_be(body, 0)? as usize;
-
-    // Check if we have enough data for the context blob
-    if 4 + context_blob_size > body.len() {
+    // `TPM2_ContextSave` returns a raw `TPMS_CONTEXT` body:
+    // sequence (u64), savedHandle (u32), hierarchy (u32),
+    // contextBlob.size (u16), contextBlob.buffer (variable).
+    if body.len() < 18 {
         return Err(TpmError::Buffer(BufferError::TooShort));
     }
 
-    // Extract the context blob
-    let context_blob = body[4..4 + context_blob_size].to_vec();
+    let context_data_size = read_u16_be(body, 16)? as usize;
+    let total_context_size = 18usize
+        .checked_add(context_data_size)
+        .ok_or(TpmError::Buffer(BufferError::Overflow))?;
+    if total_context_size > body.len() {
+        return Err(TpmError::Buffer(BufferError::TooShort));
+    }
 
-    Ok(context_blob)
+    Ok(body[..total_context_size].to_vec())
 }
 
 /// Parsed ContextLoad response.

@@ -64,6 +64,12 @@ const MAX_DATA_POLL_LOOPS: u32 = 10000;
 const MAX_BURST_POLL_LOOPS: u32 = 10000;
 /// Maximum retries for rereading a response after a transfer error.
 const MAX_RESPONSE_RETRIES: usize = 3;
+/// Upper bound for a TPM response buffer.
+///
+/// `TPM2_ContextSave` can legitimately return several kilobytes of context
+/// data, so a fixed 4 KiB cap is too small and makes valid responses fail as
+/// transport errors.
+const MAX_RESPONSE_SIZE: usize = 64 * 1024;
 
 /// TIS transport implementation.
 pub struct TisTransport {
@@ -384,7 +390,7 @@ impl TisTransport {
             )));
         }
 
-        if size > 4096 {
+        if size > MAX_RESPONSE_SIZE {
             return Err(TpmError::Transport(TransportError::Generic(
                 "Response too large",
             )));

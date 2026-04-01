@@ -35,8 +35,6 @@ const TPM2_CC_LOAD: u32 = 0x0000_0157;
 const TPM2_CC_START_AUTH_SESSION: u32 = 0x0000_0176;
 /// TPM2_FlushContext command code.
 const TPM2_CC_FLUSH_CONTEXT: u32 = 0x0000_0165;
-/// TPM2_ContextSave command code.
-const TPM2_CC_CONTEXT_SAVE: u32 = 0x0000_0162;
 /// TPM2_ContextLoad command code.
 const TPM2_CC_CONTEXT_LOAD: u32 = 0x0000_0161;
 /// Start of the HMAC session handle range.
@@ -220,30 +218,7 @@ impl TpmRmFile {
 impl Drop for TpmRmFile {
     fn drop(&mut self) {
         if let Some(chip) = TPMRM_CHIP.get() {
-            for handle in self.space.session_handles() {
-                debug!(
-                    "TPM: flushing session 0x{:08x} from space {} on /dev/tpmrm0 close",
-                    handle,
-                    self.space.id()
-                );
-                if let Err(e) = chip.flush_context(handle) {
-                    warn!("TPM: failed to flush session 0x{:08x}: {:?}", handle, e);
-                }
-            }
-
-            for handle in self.space.object_handles() {
-                debug!(
-                    "TPM: flushing transient object 0x{:08x} from space {} on /dev/tpmrm0 close",
-                    handle,
-                    self.space.id()
-                );
-                if let Err(e) = chip.flush_context(handle) {
-                    warn!(
-                        "TPM: failed to flush transient object 0x{:08x}: {:?}",
-                        handle, e
-                    );
-                }
-            }
+            chip.close_space(&self.space);
         }
 
         // Dispose the space and clean up resources.
@@ -359,15 +334,6 @@ impl InodeIo for TpmRmFile {
             // Check if this was a FlushContext command and untrack the flushed handle.
             if cmd_code == TPM2_CC_FLUSH_CONTEXT && read_len >= 14 {
                 // Parse handle from command (bytes 10-13)
-                let handle =
-                    u32::from_be_bytes([cmd_buf[10], cmd_buf[11], cmd_buf[12], cmd_buf[13]]);
-                self.space.untrack_session(handle);
-                self.space.untrack_object(handle);
-            }
-
-            // ContextSave makes the resource resumable from the saved blob, so it should no
-            // longer be treated as a loaded resource owned by this file descriptor.
-            if cmd_code == TPM2_CC_CONTEXT_SAVE && read_len >= 14 {
                 let handle =
                     u32::from_be_bytes([cmd_buf[10], cmd_buf[11], cmd_buf[12], cmd_buf[13]]);
                 self.space.untrack_session(handle);

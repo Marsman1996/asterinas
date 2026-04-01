@@ -60,6 +60,11 @@ const MAX_POLL_LOOPS: u32 = 1000;
 
 /// Maximum polling iterations for data available (TPM might be slow).
 const MAX_DATA_POLL_LOOPS: u32 = 10000;
+/// Maximum polling iterations for the first response byte.
+///
+/// Commands such as `TPM2_Create` may spend noticeable time generating RSA
+/// material before the TPM raises `DATA_AVAIL`, especially with `swtpm`.
+const MAX_RESPONSE_START_POLL_LOOPS: u32 = 500000;
 /// Maximum polling iterations for FIFO burst count.
 const MAX_BURST_POLL_LOOPS: u32 = 10000;
 /// Maximum retries for rereading a response after a transfer error.
@@ -164,6 +169,19 @@ impl TisTransport {
         Err(TpmError::Transport(TransportError::DeviceNotResponding))
     }
 
+    fn with_transport_stage<T>(
+        result: Result<T, TpmError>,
+        stage: &'static str,
+    ) -> Result<T, TpmError> {
+        result.map_err(|err| match err {
+            TpmError::Transport(TransportError::DeviceNotResponding)
+            | TpmError::Transport(TransportError::LocalityTimeout) => {
+                TpmError::Transport(TransportError::Generic(stage))
+            }
+            other => other,
+        })
+    }
+
     /// Checks if the TPM device is present and valid.
     pub fn is_device_valid(&self) -> bool {
         let access = self.read_byte(reg::ACCESS);
@@ -241,14 +259,11 @@ impl TisTransport {
         let sts = self.read_status_byte();
         info!("TIS: STS before command ready = 0x{:02x}", sts);
 
-        // If COMMAND_READY is already set, return immediately.
         if (sts & sts::COMMAND_READY) != 0 {
             info!("TIS: command already ready");
             return Ok(());
         }
 
-        // Write COMMAND_READY to request command ready state.
-        // This is a "write-1-to-clear" operation in TIS.
         self.write_byte(reg::STS, sts::COMMAND_READY);
         self.mmio_delay();
         self.mmio_delay();
@@ -333,7 +348,10 @@ impl TisTransport {
     fn wait_for_data_available(&self) -> Result<(), TpmError> {
         debug!("TIS: waiting for data available");
 
-        match self.wait_for_status(sts::DATA_AVAIL | sts::STS_VALID, MAX_DATA_POLL_LOOPS) {
+        match self.wait_for_status(
+            sts::DATA_AVAIL | sts::STS_VALID,
+            MAX_RESPONSE_START_POLL_LOOPS,
+        ) {
             Ok(sts) => {
                 info!("TIS: data available, STS = 0x{:02x}", sts);
                 Ok(())
@@ -374,10 +392,16 @@ impl TisTransport {
     /// Reads a complete TPM response.
     fn read_response(&self) -> Result<Vec<u8>, TpmError> {
         // Wait for data (or continue if timeout).
-        self.wait_for_data_available()?;
+        Self::with_transport_stage(
+            self.wait_for_data_available(),
+            "timed out waiting for response data availability",
+        )?;
 
         // Read header to get size.
-        let header = self.read_from_fifo(10)?;
+        let header = Self::with_transport_stage(
+            self.read_from_fifo(10),
+            "timed out while reading TPM response header from FIFO",
+        )?;
         info!("TIS: response header: {:?}", &header[..10]);
 
         // Parse response size (big-endian u32 at offset 2).
@@ -399,11 +423,17 @@ impl TisTransport {
         // Read remaining data.
         let mut response = header;
         if size > 10 {
-            let remaining = self.read_from_fifo(size - 10)?;
+            let remaining = Self::with_transport_stage(
+                self.read_from_fifo(size - 10),
+                "timed out while reading TPM response body from FIFO",
+            )?;
             response.extend_from_slice(&remaining);
         }
 
-        let sts = self.wait_for_status(sts::STS_VALID, MAX_DATA_POLL_LOOPS)?;
+        let sts = Self::with_transport_stage(
+            self.wait_for_status(sts::STS_VALID, MAX_DATA_POLL_LOOPS),
+            "timed out waiting for final response status validation",
+        )?;
         if (sts & sts::DATA_AVAIL) != 0 {
             return Err(TpmError::Transport(TransportError::Generic(
                 "Unread response data left in FIFO",
@@ -416,7 +446,10 @@ impl TisTransport {
         // state machine in the completed-command state can cause the next send to
         // fail spuriously.
         self.ready();
-        self.wait_for_command_ready()?;
+        Self::with_transport_stage(
+            self.wait_for_command_ready(),
+            "timed out returning TPM to command-ready after response",
+        )?;
 
         info!("TIS: read {} byte response", response.len());
         Ok(response)
@@ -429,8 +462,14 @@ impl TpmTransport for TisTransport {
 
         let result = (|| {
             self.request_locality()?;
-            self.wait_for_command_ready()?;
-            self.write_to_fifo(cmd)?;
+            Self::with_transport_stage(
+                self.wait_for_command_ready(),
+                "timed out waiting for command-ready before send",
+            )?;
+            Self::with_transport_stage(
+                self.write_to_fifo(cmd),
+                "timed out while writing command bytes to FIFO",
+            )?;
             self.trigger_command();
             Ok(())
         })();
@@ -447,7 +486,10 @@ impl TpmTransport for TisTransport {
         let mut last_error = None;
 
         for attempt in 0..MAX_RESPONSE_RETRIES {
-            match self.read_response() {
+            match Self::with_transport_stage(
+                self.read_response(),
+                "timed out while receiving TPM response",
+            ) {
                 Ok(response) => {
                     self.release_locality();
                     return Ok(response);

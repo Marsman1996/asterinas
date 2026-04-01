@@ -11,7 +11,7 @@ use alloc::{sync::Arc, vec::Vec};
 
 use aster_tpm::{TpmChip, TpmSpace, TpmSpaceManager};
 use device_id::{DeviceId, MinorId};
-use log::{debug, info, warn};
+use log::{debug, error, info, warn};
 use ostd::mm::{Infallible, VmReader, VmWriter};
 
 use crate::{
@@ -355,7 +355,13 @@ impl InodeIo for TpmRmFile {
         let response = chip
             .execute_command_in_space(&cmd_buf[..read_len], &self.space)
             .map_err(|e| {
-                warn!("TPM: command failed in space {}: {:?}", self.space.id(), e);
+                let cmd_code = u32::from_be_bytes([cmd_buf[6], cmd_buf[7], cmd_buf[8], cmd_buf[9]]);
+                error!(
+                    "TPM: /dev/tpmrm0 command 0x{:08x} failed in space {}: {:?}",
+                    cmd_code,
+                    self.space.id(),
+                    e
+                );
                 Error::with_message(Errno::EIO, "TPM command execution failed")
             })?;
 

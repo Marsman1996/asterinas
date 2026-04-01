@@ -39,6 +39,8 @@ pub struct TpmSpace {
     sessions: Mutex<BTreeSet<u32>>,
     /// Transient object handles created in this space.
     transient_objects: Mutex<BTreeSet<u32>>,
+    /// Objects that were explicitly restored from a userspace context blob.
+    externally_loaded_objects: Mutex<BTreeSet<u32>>,
     /// Whether this space has been disposed.
     disposed: Mutex<bool>,
 }
@@ -61,6 +63,7 @@ impl TpmSpace {
             resource_manager: Arc::new(TpmResourceManager::new()),
             sessions: Mutex::new(BTreeSet::new()),
             transient_objects: Mutex::new(BTreeSet::new()),
+            externally_loaded_objects: Mutex::new(BTreeSet::new()),
             disposed: Mutex::new(false),
         }
     }
@@ -118,6 +121,7 @@ impl TpmSpace {
     /// Removes a transient object handle from this space.
     pub fn untrack_object(&self, handle: u32) -> bool {
         let removed = self.transient_objects.lock().remove(&handle);
+        self.externally_loaded_objects.lock().remove(&handle);
         if removed {
             debug!(
                 "TPM: untracked transient object 0x{:08x} from space {}",
@@ -130,6 +134,20 @@ impl TpmSpace {
     /// Returns all transient object handles in this space.
     pub fn object_handles(&self) -> Vec<u32> {
         self.transient_objects.lock().iter().copied().collect()
+    }
+
+    /// Marks an object as being explicitly restored from a userspace context.
+    pub fn mark_externally_loaded_object(&self, handle: u32) {
+        self.externally_loaded_objects.lock().insert(handle);
+        debug!(
+            "TPM: marked transient object 0x{:08x} as externally loaded in space {}",
+            handle, self.id
+        );
+    }
+
+    /// Returns whether an object came from an explicit userspace `ContextLoad`.
+    pub fn is_externally_loaded_object(&self, handle: u32) -> bool {
+        self.externally_loaded_objects.lock().contains(&handle)
     }
 
     /// Returns the number of transient objects in this space.
@@ -165,6 +183,7 @@ impl TpmSpace {
                 self.id
             );
             self.transient_objects.lock().clear();
+            self.externally_loaded_objects.lock().clear();
         }
 
         self.resource_manager.clear_all();

@@ -5,7 +5,7 @@
 use alloc::{boxed::Box, collections::BTreeMap, vec::Vec};
 use core::sync::atomic::{AtomicU8, Ordering};
 
-use log::{debug, info, warn};
+use log::{debug, error, info, warn};
 use ostd::sync::Mutex;
 
 use crate::{
@@ -837,6 +837,7 @@ impl TpmChip {
                 space.resource_manager().remove_context_blob(saved_handle);
                 space.untrack_object(saved_handle);
                 space.track_object(loaded_handle);
+                space.mark_externally_loaded_object(loaded_handle);
             }
             TpmResourceType::HmacSession | TpmResourceType::PolicySession => {
                 // Sessions must stay loaded after an explicit `ContextLoad`;
@@ -855,6 +856,18 @@ impl TpmChip {
 
     pub fn close_space(&self, space: &TpmSpace) {
         for logical_handle in space.object_handles() {
+            if space.is_externally_loaded_object(logical_handle) {
+                if let Err(err) = self.flush_context(logical_handle) {
+                    warn!(
+                        "TPM: failed to flush externally loaded object 0x{:08x} while closing space {}: {:?}",
+                        logical_handle,
+                        space.id(),
+                        err
+                    );
+                }
+                continue;
+            }
+
             if space
                 .resource_manager()
                 .get_context_blob(logical_handle)
@@ -928,10 +941,27 @@ impl TpmChip {
 
         let mut translated_cmd = cmd.to_vec();
         let command_code = Self::command_code(cmd).unwrap_or(0);
-        let translated_handles = self.prepare_space(&mut translated_cmd, space)?;
+        let translated_handles = self
+            .prepare_space(&mut translated_cmd, space)
+            .map_err(|err| {
+                error!(
+                    "TPM: failed to prepare space {} for command 0x{:08x}: {:?}",
+                    space.id(),
+                    command_code,
+                    err
+                );
+                err
+            })?;
         let response = match self.execute_command(&translated_cmd) {
             Ok(response) => response,
             Err(err) => {
+                error!(
+                    "TPM: command 0x{:08x} failed in space {} with translated handles {:?}: {:?}",
+                    command_code,
+                    space.id(),
+                    translated_handles,
+                    err
+                );
                 if let Err(commit_err) = self.commit_prepared_handles(space, &translated_handles) {
                     warn!(
                         "TPM: failed to restore prepared handles after command error in space {}: {:?}",

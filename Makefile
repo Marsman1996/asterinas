@@ -15,7 +15,7 @@ OVMF ?= on
 RELEASE ?= 0
 RELEASE_LTO ?= 0
 LOG_LEVEL ?= error
-TPM ?= auto
+TEST_TPM ?= off
 SWTPM_SOCK ?= /tmp/swtpm/swtpm-sock
 SCHEME ?= ""
 SMP ?= 1
@@ -24,7 +24,7 @@ FEATURES ?=
 NO_DEFAULT_FEATURES ?= 0
 COVERAGE ?= 0
 # Specify whether to build regression tests under `test/initramfs/src/apps`.
-ENABLE_BASIC_TEST ?= true
+ENABLE_BASIC_TEST ?= false
 # Specify the primary system console (supported: tty0, ttyS0, hvc0).
 # - tty0: The active virtual terminal (VT).
 # - ttyS0: The serial (UART) terminal.
@@ -113,6 +113,10 @@ export VSOCK=on
 CARGO_OSDK_BUILD_ARGS += --init-args="/test/run_vsock_test.sh"
 endif
 
+ifeq ($(TEST_TPM),on)
+ENABLE_BASIC_TEST := true
+endif
+
 ifeq ($(RELEASE_LTO), 1)
 CARGO_OSDK_COMMON_ARGS += --profile release-lto
 OSTD_TASK_STACK_SIZE_IN_PAGES = 8
@@ -187,12 +191,8 @@ ifeq ($(ENABLE_KVM), 1)
 	endif
 endif
 
-ifeq ($(TPM),on)
+ifeq ($(TEST_TPM),on)
 CARGO_OSDK_COMMON_ARGS += --qemu-args="$(TPM_QEMU_ARGS)"
-else ifeq ($(TPM),auto)
-ifneq ($(wildcard $(SWTPM_SOCK)),)
-CARGO_OSDK_COMMON_ARGS += --qemu-args="$(TPM_QEMU_ARGS)"
-endif
 endif
 
 # Skip GZIP to make encoding and decoding of initramfs faster

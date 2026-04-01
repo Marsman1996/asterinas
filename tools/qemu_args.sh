@@ -21,8 +21,6 @@ VHOST=${VHOST:-"off"}
 VSOCK=${VSOCK:-"off"}
 NETDEV=${NETDEV:-"user"}
 CONSOLE=${CONSOLE:-"hvc0"}
-TPM=${TPM:-"auto"}
-SWTPM_SOCK=${SWTPM_SOCK:-"/tmp/swtpm/swtpm-sock"}
 
 SSH_RAND_PORT=${SSH_PORT:-$(shuf -i 1024-65535 -n 1)}
 NGINX_RAND_PORT=${NGINX_PORT:-$(shuf -i 1024-65535 -n 1)}
@@ -55,12 +53,6 @@ if [ "$CONSOLE" = "hvc0" ]; then
     CONSOLE_ARGS="-device virtconsole,chardev=mux -serial file:qemu-serial.log"
 else
     CONSOLE_ARGS="-serial chardev:mux"
-fi
-
-if [ "$TPM" = "on" ] || { [ "$TPM" = "auto" ] && [ -S "$SWTPM_SOCK" ]; }; then
-    TPM_ARGS="-chardev socket,id=chrtpm,path=$SWTPM_SOCK -tpmdev emulator,id=tpm0,chardev=chrtpm -device tpm-tis,tpmdev=tpm0"
-else
-    TPM_ARGS=""
 fi
 
 if [ "$1" = "tdx" ]; then
@@ -103,7 +95,6 @@ COMMON_QEMU_ARGS="\
     -chardev stdio,id=mux,mux=on,signal=off,logfile=qemu.log \
     $NETDEV_ARGS \
     $QEMU_OPT_ARG_DUMP_PACKETS \
-    $TPM_ARGS \
     -device isa-debug-exit,iobase=0xf4,iosize=0x04 \
     -drive if=none,format=raw,id=x0,file=./test/initramfs/build/ext2.img \
     -drive if=none,format=raw,id=x1,file=./test/initramfs/build/exfat.img \

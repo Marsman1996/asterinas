@@ -86,6 +86,8 @@ SHELL := /bin/bash
 
 CARGO_OSDK := ~/.cargo/bin/cargo-osdk
 
+TPM_QEMU_ARGS := -chardev socket,id=chrtpm,path=$(SWTPM_SOCK) -tpmdev emulator,id=tpm0,chardev=chrtpm -device tpm-tis,tpmdev=tpm0
+
 # Common arguments for `cargo osdk` `build`, `run` and `test` commands.
 CARGO_OSDK_COMMON_ARGS := --target-arch=$(OSDK_TARGET_ARCH)
 # The build arguments also apply to the `cargo osdk run` command.
@@ -183,6 +185,14 @@ ifeq ($(ENABLE_KVM), 1)
 	ifeq ($(OSDK_TARGET_ARCH), x86_64)
 	CARGO_OSDK_COMMON_ARGS += --qemu-args="-accel kvm"
 	endif
+endif
+
+ifeq ($(TPM),on)
+CARGO_OSDK_COMMON_ARGS += --qemu-args="$(TPM_QEMU_ARGS)"
+else ifeq ($(TPM),auto)
+ifneq ($(wildcard $(SWTPM_SOCK)),)
+CARGO_OSDK_COMMON_ARGS += --qemu-args="$(TPM_QEMU_ARGS)"
+endif
 endif
 
 # Skip GZIP to make encoding and decoding of initramfs faster

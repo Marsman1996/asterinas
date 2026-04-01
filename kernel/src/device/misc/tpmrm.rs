@@ -39,6 +39,14 @@ const TPM2_CC_FLUSH_CONTEXT: u32 = 0x0000_0165;
 const TPM2_CC_CONTEXT_SAVE: u32 = 0x0000_0162;
 /// TPM2_ContextLoad command code.
 const TPM2_CC_CONTEXT_LOAD: u32 = 0x0000_0161;
+/// Start of the HMAC session handle range.
+const TPM_HMAC_SESSION_HANDLE_START: u32 = 0x0200_0000;
+/// End of the HMAC session handle range.
+const TPM_HMAC_SESSION_HANDLE_END: u32 = 0x02FF_FFFF;
+/// Start of the policy session handle range.
+const TPM_POLICY_SESSION_HANDLE_START: u32 = 0x0300_0000;
+/// End of the policy session handle range.
+const TPM_POLICY_SESSION_HANDLE_END: u32 = 0x03FF_FFFF;
 /// Start of the transient object handle range.
 const TPM_TRANSIENT_HANDLE_START: u32 = 0x8000_0000;
 /// End of the transient object handle range.
@@ -339,6 +347,12 @@ impl InodeIo for TpmRmFile {
                     u32::from_be_bytes([response[10], response[11], response[12], response[13]]);
                 if (TPM_TRANSIENT_HANDLE_START..=TPM_TRANSIENT_HANDLE_END).contains(&handle) {
                     self.space.track_object(handle);
+                } else if (TPM_HMAC_SESSION_HANDLE_START..=TPM_HMAC_SESSION_HANDLE_END)
+                    .contains(&handle)
+                    || (TPM_POLICY_SESSION_HANDLE_START..=TPM_POLICY_SESSION_HANDLE_END)
+                        .contains(&handle)
+                {
+                    self.space.track_session(handle);
                 }
             }
 

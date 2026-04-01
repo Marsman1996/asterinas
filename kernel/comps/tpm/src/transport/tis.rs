@@ -41,6 +41,8 @@ mod access {
 
 /// TIS status register bits (low byte of STS register).
 mod sts {
+    /// Retry reading the current response.
+    pub const RESPONSE_RETRY: u8 = 0x02;
     /// TPM is in command ready state.
     pub const COMMAND_READY: u8 = 0x40;
     /// Start command execution.
@@ -58,6 +60,10 @@ const MAX_POLL_LOOPS: u32 = 1000;
 
 /// Maximum polling iterations for data available (TPM might be slow).
 const MAX_DATA_POLL_LOOPS: u32 = 10000;
+/// Maximum polling iterations for FIFO burst count.
+const MAX_BURST_POLL_LOOPS: u32 = 10000;
+/// Maximum retries for rereading a response after a transfer error.
+const MAX_RESPONSE_RETRIES: usize = 3;
 
 /// TIS transport implementation.
 pub struct TisTransport {
@@ -109,6 +115,47 @@ impl TisTransport {
         for _ in 0..200 {
             core::hint::spin_loop();
         }
+    }
+
+    /// Returns the current TIS status register value.
+    fn read_status(&self) -> u32 {
+        self.read_u32(reg::STS)
+    }
+
+    /// Returns the current low-byte TIS status bits.
+    fn read_status_byte(&self) -> u8 {
+        self.read_status() as u8
+    }
+
+    /// Returns the FIFO burst count from the TIS status register.
+    fn burst_count(&self) -> usize {
+        ((self.read_status() >> 8) & 0xFFFF) as usize
+    }
+
+    /// Waits until all requested status bits are set.
+    fn wait_for_status(&self, mask: u8, max_loops: u32) -> Result<u8, TpmError> {
+        for _ in 0..max_loops {
+            let sts = self.read_status_byte();
+            if (sts & mask) == mask {
+                return Ok(sts);
+            }
+            self.mmio_delay();
+        }
+
+        Err(TpmError::Transport(TransportError::DeviceNotResponding))
+    }
+
+    /// Waits until the FIFO burst count is nonzero.
+    fn wait_for_burst_count(&self) -> Result<usize, TpmError> {
+        for _ in 0..MAX_BURST_POLL_LOOPS {
+            let burst = self.burst_count();
+            if burst != 0 {
+                return Ok(burst);
+            }
+            self.mmio_delay();
+        }
+
+        Err(TpmError::Transport(TransportError::DeviceNotResponding))
     }
 
     /// Checks if the TPM device is present and valid.
@@ -177,9 +224,15 @@ impl TisTransport {
         self.mmio_delay();
     }
 
+    /// Forces the TPM back to command-ready state.
+    fn ready(&self) {
+        self.write_byte(reg::STS, sts::COMMAND_READY);
+        self.mmio_delay();
+    }
+
     /// Waits for the TPM to be ready to receive a command.
     fn wait_for_command_ready(&self) -> Result<(), TpmError> {
-        let sts = self.read_byte(reg::STS);
+        let sts = self.read_status_byte();
         info!("TIS: STS before command ready = 0x{:02x}", sts);
 
         // If COMMAND_READY is already set, return immediately.
@@ -195,53 +248,69 @@ impl TisTransport {
         self.mmio_delay();
         self.mmio_delay();
 
-        // Wait for COMMAND_READY to be set.
-        for i in 0..MAX_POLL_LOOPS {
-            let sts = self.read_byte(reg::STS);
-            if (sts & sts::COMMAND_READY) != 0 {
-                info!("TIS: command ready after {} iterations", i);
-                return Ok(());
+        match self.wait_for_status(sts::COMMAND_READY, MAX_POLL_LOOPS) {
+            Ok(sts) => {
+                info!("TIS: command ready reached, STS = 0x{:02x}", sts);
+                Ok(())
             }
-            self.mmio_delay();
+            Err(err) => {
+                warn!(
+                    "TIS: command ready timeout, STS = 0x{:02x}",
+                    self.read_status_byte()
+                );
+                Err(err)
+            }
         }
-
-        // Check final state
-        let final_sts = self.read_byte(reg::STS);
-        warn!("TIS: command ready timeout, STS = 0x{:02x}", final_sts);
-
-        // Continue anyway - some TPMs work without COMMAND_READY being set properly.
-        Ok(())
     }
 
     /// Writes command bytes to the FIFO.
     fn write_to_fifo(&self, data: &[u8]) -> Result<(), TpmError> {
         info!("TIS: writing {} bytes to FIFO", data.len());
 
-        for (i, &byte) in data.iter().enumerate() {
-            self.write_byte(reg::DATA_FIFO, byte);
-            // Check STS after each write to see if EXPECT is set
-            if i == 0 {
-                let sts = self.read_byte(reg::STS);
-                debug!("TIS: STS after first FIFO write = 0x{:02x}", sts);
-            }
-            self.mmio_delay();
+        if data.is_empty() {
+            return Ok(());
         }
 
-        // Wait for EXPECT bit to clear after writing all bytes.
-        // This indicates the TPM has accepted the complete command.
-        info!("TIS: waiting for EXPECT to clear");
-        for i in 0..MAX_POLL_LOOPS {
-            let sts = self.read_byte(reg::STS);
+        let mut offset = 0;
+        let last_byte_index = data.len() - 1;
+
+        while offset < last_byte_index {
+            let burst = self.wait_for_burst_count()?;
+            let chunk_len = core::cmp::min(burst, last_byte_index - offset);
+            for &byte in &data[offset..offset + chunk_len] {
+                self.write_byte(reg::DATA_FIFO, byte);
+                self.mmio_delay();
+            }
+            offset += chunk_len;
+
+            let sts = self.wait_for_status(sts::STS_VALID, MAX_POLL_LOOPS)?;
+            if offset != 0 {
+                debug!("TIS: STS after FIFO chunk = 0x{:02x}", sts);
+            }
             if (sts & sts::EXPECT) == 0 {
-                info!("TIS: EXPECT cleared after {} iterations", i);
-                return Ok(());
+                return Err(TpmError::Transport(TransportError::Generic(
+                    "TPM stopped accepting command bytes before final byte",
+                )));
             }
-            self.mmio_delay();
         }
 
-        let final_sts = self.read_byte(reg::STS);
-        warn!("TIS: EXPECT did not clear, STS = 0x{:02x}", final_sts);
-        // Continue anyway
+        self.wait_for_burst_count()?;
+        self.write_byte(reg::DATA_FIFO, data[last_byte_index]);
+        self.mmio_delay();
+
+        info!("TIS: waiting for EXPECT to clear");
+        let sts = self.wait_for_status(sts::STS_VALID, MAX_POLL_LOOPS)?;
+        if (sts & sts::EXPECT) != 0 {
+            warn!(
+                "TIS: EXPECT still set after final byte, STS = 0x{:02x}",
+                sts
+            );
+            return Err(TpmError::Transport(TransportError::Generic(
+                "TPM still expects command data after final byte",
+            )));
+        }
+
+        info!("TIS: EXPECT cleared, STS = 0x{:02x}", sts);
         Ok(())
     }
 
@@ -258,34 +327,42 @@ impl TisTransport {
     fn wait_for_data_available(&self) -> Result<(), TpmError> {
         debug!("TIS: waiting for data available");
 
-        for i in 0..MAX_DATA_POLL_LOOPS {
-            let sts = self.read_byte(reg::STS);
-            if (sts & sts::DATA_AVAIL) != 0 {
-                info!("TIS: data available after {} iterations", i);
-                return Ok(());
+        match self.wait_for_status(sts::DATA_AVAIL | sts::STS_VALID, MAX_DATA_POLL_LOOPS) {
+            Ok(sts) => {
+                info!("TIS: data available, STS = 0x{:02x}", sts);
+                Ok(())
             }
-            self.mmio_delay();
+            Err(err) => {
+                warn!(
+                    "TIS: data available timeout, STS = 0x{:02x}",
+                    self.read_status_byte()
+                );
+                Err(err)
+            }
         }
-
-        // Check final state
-        let final_sts = self.read_byte(reg::STS);
-        warn!("TIS: data available timeout, STS = 0x{:02x}", final_sts);
-
-        // Continue anyway and try to read - some TPMs work without DATA_AVAIL being set.
-        Ok(())
     }
 
     /// Reads response data from the FIFO.
-    fn read_from_fifo(&self, count: usize) -> Vec<u8> {
+    fn read_from_fifo(&self, count: usize) -> Result<Vec<u8>, TpmError> {
         let mut buf = alloc::vec![0u8; count];
-        for (i, byte) in buf.iter_mut().enumerate() {
-            *byte = self.read_byte(reg::DATA_FIFO);
-            if i == 0 {
-                debug!("TIS: first response byte = 0x{:02x}", byte);
+        let mut offset = 0;
+
+        while offset < count {
+            self.wait_for_status(sts::DATA_AVAIL | sts::STS_VALID, MAX_DATA_POLL_LOOPS)?;
+            let burst = self.wait_for_burst_count()?;
+            let chunk_len = core::cmp::min(burst, count - offset);
+            for i in 0..chunk_len {
+                let byte = self.read_byte(reg::DATA_FIFO);
+                if offset == 0 && i == 0 {
+                    debug!("TIS: first response byte = 0x{:02x}", byte);
+                }
+                buf[offset + i] = byte;
+                self.mmio_delay();
             }
-            self.mmio_delay();
+            offset += chunk_len;
         }
-        buf
+
+        Ok(buf)
     }
 
     /// Reads a complete TPM response.
@@ -294,7 +371,7 @@ impl TisTransport {
         self.wait_for_data_available()?;
 
         // Read header to get size.
-        let header = self.read_from_fifo(10);
+        let header = self.read_from_fifo(10)?;
         info!("TIS: response header: {:?}", &header[..10]);
 
         // Parse response size (big-endian u32 at offset 2).
@@ -316,9 +393,24 @@ impl TisTransport {
         // Read remaining data.
         let mut response = header;
         if size > 10 {
-            let remaining = self.read_from_fifo(size - 10);
+            let remaining = self.read_from_fifo(size - 10)?;
             response.extend_from_slice(&remaining);
         }
+
+        let sts = self.wait_for_status(sts::STS_VALID, MAX_DATA_POLL_LOOPS)?;
+        if (sts & sts::DATA_AVAIL) != 0 {
+            return Err(TpmError::Transport(TransportError::Generic(
+                "Unread response data left in FIFO",
+            )));
+        }
+
+        // Return the TPM to command-ready state before the next command.
+        // Some command sequences issued by tpm2-tss perform immediate follow-up
+        // commands or resubmissions on the same file descriptor; leaving the TIS
+        // state machine in the completed-command state can cause the next send to
+        // fail spuriously.
+        self.ready();
+        self.wait_for_command_ready()?;
 
         info!("TIS: read {} byte response", response.len());
         Ok(response)
@@ -329,29 +421,49 @@ impl TpmTransport for TisTransport {
     fn send(&self, cmd: &[u8]) -> Result<(), TpmError> {
         info!("TIS: sending {} byte command", cmd.len());
 
-        // Acquire locality.
-        self.request_locality()?;
+        let result = (|| {
+            self.request_locality()?;
+            self.wait_for_command_ready()?;
+            self.write_to_fifo(cmd)?;
+            self.trigger_command();
+            Ok(())
+        })();
 
-        // Wait for command ready.
-        self.wait_for_command_ready()?;
+        if result.is_err() {
+            self.ready();
+            self.release_locality();
+        }
 
-        // Write command to FIFO.
-        self.write_to_fifo(cmd)?;
-
-        // Trigger command execution.
-        self.trigger_command();
-
-        Ok(())
+        result
     }
 
     fn recv(&self) -> Result<Vec<u8>, TpmError> {
-        // Read response.
-        let response = self.read_response()?;
+        let mut last_error = None;
 
-        // Release locality.
+        for attempt in 0..MAX_RESPONSE_RETRIES {
+            match self.read_response() {
+                Ok(response) => {
+                    self.release_locality();
+                    return Ok(response);
+                }
+                Err(err) => {
+                    warn!(
+                        "TIS: response read failed on attempt {}: {:?}",
+                        attempt + 1,
+                        err
+                    );
+                    last_error = Some(err);
+                    if attempt + 1 < MAX_RESPONSE_RETRIES {
+                        self.write_byte(reg::STS, sts::RESPONSE_RETRY);
+                        self.mmio_delay();
+                    }
+                }
+            }
+        }
+
+        self.ready();
         self.release_locality();
-
-        Ok(response)
+        Err(last_error.unwrap())
     }
 }
 

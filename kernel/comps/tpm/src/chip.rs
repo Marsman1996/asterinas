@@ -658,6 +658,11 @@ impl TpmChip {
         cmd[10..14].copy_from_slice(&remapped_handle.to_be_bytes());
     }
 
+    fn context_load_saved_handle(cmd: &[u8]) -> Option<u32> {
+        (cmd.len() >= TPM_HEADER_SIZE + 12)
+            .then(|| u32::from_be_bytes([cmd[18], cmd[19], cmd[20], cmd[21]]))
+    }
+
     fn command_uses_space_handle(command_code: u32) -> bool {
         matches!(
             command_code,
@@ -786,6 +791,20 @@ impl TpmChip {
         }
     }
 
+    fn commit_context_load(&self, space: &TpmSpace, original_cmd: &[u8]) {
+        let Some(saved_handle) = Self::context_load_saved_handle(original_cmd) else {
+            return;
+        };
+
+        // An explicit `ContextLoad` means userspace has already materialized the
+        // object or session back into the TPM. Keep it in the live set for this
+        // file descriptor, and consume the saved blob so later commands on the
+        // same fd do not perform a second implicit `ContextLoad`.
+        space.resource_manager().remove_context_blob(saved_handle);
+        space.untrack_object(saved_handle);
+        space.untrack_session(saved_handle);
+    }
+
     pub fn close_space(&self, space: &TpmSpace) {
         for logical_handle in space.object_handles() {
             if space
@@ -879,6 +898,10 @@ impl TpmChip {
         let commit_result = match command_code {
             TPM2_CC_CONTEXT_SAVE => {
                 self.commit_context_save(space, cmd, &translated_handles, &response)
+            }
+            TPM2_CC_CONTEXT_LOAD => {
+                self.commit_context_load(space, cmd);
+                Ok(())
             }
             TPM2_CC_FLUSH_CONTEXT => {
                 self.commit_flush_context(space, cmd);

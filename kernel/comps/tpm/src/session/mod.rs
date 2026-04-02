@@ -11,8 +11,8 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use log::{debug, info, warn};
 
 use crate::{
-    TpmChip,
     resource::{TpmResourceHandle, TpmResourceType},
+    TpmChip,
 };
 
 /// Types of TPM sessions.

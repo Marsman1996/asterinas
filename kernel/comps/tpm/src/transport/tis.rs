@@ -9,7 +9,7 @@
 
 use alloc::vec::Vec;
 
-use log::{debug, error, info, warn};
+use log::{debug, error, trace, warn};
 use ostd::{io::IoMem, mm::VmIoOnce};
 
 use crate::{
@@ -93,14 +93,11 @@ impl TisTransport {
     }
 
     /// Reads a byte from the MMIO region.
-    fn read_byte(&self, offset: usize) -> u8 {
-        match self.io_mem.read_once::<u8>(offset) {
-            Ok(val) => val,
-            Err(e) => {
-                error!("TIS: read_byte at offset 0x{:x} failed: {:?}", offset, e);
-                0xFF
-            }
-        }
+    fn read_byte(&self, offset: usize) -> Result<u8, TpmError> {
+        self.io_mem.read_once::<u8>(offset).map_err(|e| {
+            error!("TIS: read_byte at offset 0x{:x} failed: {:?}", offset, e);
+            TpmError::Transport(TransportError::MmioAccess)
+        })
     }
 
     /// Writes a byte to the MMIO region.
@@ -111,14 +108,11 @@ impl TisTransport {
     }
 
     /// Reads a 32-bit value from the MMIO region.
-    fn read_u32(&self, offset: usize) -> u32 {
-        match self.io_mem.read_once::<u32>(offset) {
-            Ok(val) => val,
-            Err(e) => {
-                error!("TIS: read_u32 at offset 0x{:x} failed: {:?}", offset, e);
-                0xFFFFFFFF
-            }
-        }
+    fn read_u32(&self, offset: usize) -> Result<u32, TpmError> {
+        self.io_mem.read_once::<u32>(offset).map_err(|e| {
+            error!("TIS: read_u32 at offset 0x{:x} failed: {:?}", offset, e);
+            TpmError::Transport(TransportError::MmioAccess)
+        })
     }
 
     /// Short delay for MMIO synchronization.
@@ -129,24 +123,25 @@ impl TisTransport {
     }
 
     /// Returns the current TIS status register value.
-    fn read_status(&self) -> u32 {
+    fn read_status(&self) -> Result<u32, TpmError> {
         self.read_u32(reg::STS)
     }
 
     /// Returns the current low-byte TIS status bits.
-    fn read_status_byte(&self) -> u8 {
-        self.read_status() as u8
+    fn read_status_byte(&self) -> Result<u8, TpmError> {
+        self.read_status().map(|status| status as u8)
     }
 
     /// Returns the FIFO burst count from the TIS status register.
-    fn burst_count(&self) -> usize {
-        ((self.read_status() >> 8) & 0xFFFF) as usize
+    fn burst_count(&self) -> Result<usize, TpmError> {
+        self.read_status()
+            .map(|status| ((status >> 8) & 0xFFFF) as usize)
     }
 
     /// Waits until all requested status bits are set.
     fn wait_for_status(&self, mask: u8, max_loops: u32) -> Result<u8, TpmError> {
         for _ in 0..max_loops {
-            let sts = self.read_status_byte();
+            let sts = self.read_status_byte()?;
             if (sts & mask) == mask {
                 return Ok(sts);
             }
@@ -159,7 +154,7 @@ impl TisTransport {
     /// Waits until the FIFO burst count is nonzero.
     fn wait_for_burst_count(&self) -> Result<usize, TpmError> {
         for _ in 0..MAX_BURST_POLL_LOOPS {
-            let burst = self.burst_count();
+            let burst = self.burst_count()?;
             if burst != 0 {
                 return Ok(burst);
             }
@@ -183,31 +178,31 @@ impl TisTransport {
     }
 
     /// Checks if the TPM device is present and valid.
-    pub fn is_device_valid(&self) -> bool {
-        let access = self.read_byte(reg::ACCESS);
-        info!("TIS: ACCESS register = 0x{:02x}", access);
-        (access & access::TPM_REG_VALID_STS) != 0
+    pub fn is_device_valid(&self) -> Result<bool, TpmError> {
+        let access = self.read_byte(reg::ACCESS)?;
+        debug!("TIS: ACCESS register = 0x{:02x}", access);
+        Ok((access & access::TPM_REG_VALID_STS) != 0)
     }
 
     /// Gets the device and vendor ID.
-    pub fn get_did_vid(&self) -> (u16, u16) {
-        let val = self.read_u32(reg::DID_VID);
-        info!("TIS: DID_VID = 0x{:08x}", val);
+    pub fn get_did_vid(&self) -> Result<(u16, u16), TpmError> {
+        let val = self.read_u32(reg::DID_VID)?;
+        debug!("TIS: DID_VID = 0x{:08x}", val);
         let vid = (val & 0xFFFF) as u16;
         let did = ((val >> 16) & 0xFFFF) as u16;
-        (did, vid)
+        Ok((did, vid))
     }
 
     /// Requests locality 0.
     fn request_locality(&self) -> Result<(), TpmError> {
-        info!("TIS: requesting locality 0");
+        debug!("TIS: requesting locality 0");
 
         // Check if locality 0 is already active.
-        let access = self.read_byte(reg::ACCESS);
-        info!("TIS: ACCESS before request = 0x{:02x}", access);
+        let access = self.read_byte(reg::ACCESS)?;
+        debug!("TIS: ACCESS before request = 0x{:02x}", access);
 
         if (access & access::ACTIVE_LOCALITY) != 0 {
-            info!("TIS: locality 0 already active");
+            debug!("TIS: locality 0 already active");
             return Ok(());
         }
 
@@ -217,16 +212,16 @@ impl TisTransport {
 
         // Poll until locality is granted.
         for i in 0..MAX_POLL_LOOPS {
-            let access = self.read_byte(reg::ACCESS);
+            let access = self.read_byte(reg::ACCESS)?;
             if (access & access::ACTIVE_LOCALITY) != 0 {
-                info!("TIS: locality 0 granted after {} iterations", i);
+                debug!("TIS: locality 0 granted after {} iterations", i);
                 return Ok(());
             }
             self.mmio_delay();
         }
 
         // Check final state
-        let final_access = self.read_byte(reg::ACCESS);
+        let final_access = self.read_byte(reg::ACCESS)?;
         warn!(
             "TIS: locality request timeout, ACCESS = 0x{:02x}",
             final_access
@@ -256,11 +251,11 @@ impl TisTransport {
 
     /// Waits for the TPM to be ready to receive a command.
     fn wait_for_command_ready(&self) -> Result<(), TpmError> {
-        let sts = self.read_status_byte();
-        info!("TIS: STS before command ready = 0x{:02x}", sts);
+        let sts = self.read_status_byte()?;
+        trace!("TIS: STS before command ready = 0x{:02x}", sts);
 
         if (sts & sts::COMMAND_READY) != 0 {
-            info!("TIS: command already ready");
+            trace!("TIS: command already ready");
             return Ok(());
         }
 
@@ -271,14 +266,13 @@ impl TisTransport {
 
         match self.wait_for_status(sts::COMMAND_READY, MAX_POLL_LOOPS) {
             Ok(sts) => {
-                info!("TIS: command ready reached, STS = 0x{:02x}", sts);
+                trace!("TIS: command ready reached, STS = 0x{:02x}", sts);
                 Ok(())
             }
             Err(err) => {
-                warn!(
-                    "TIS: command ready timeout, STS = 0x{:02x}",
-                    self.read_status_byte()
-                );
+                if let Ok(sts) = self.read_status_byte() {
+                    warn!("TIS: command ready timeout, STS = 0x{:02x}", sts);
+                }
                 Err(err)
             }
         }
@@ -286,7 +280,7 @@ impl TisTransport {
 
     /// Writes command bytes to the FIFO.
     fn write_to_fifo(&self, data: &[u8]) -> Result<(), TpmError> {
-        info!("TIS: writing {} bytes to FIFO", data.len());
+        debug!("TIS: writing {} bytes to FIFO", data.len());
 
         if data.is_empty() {
             return Ok(());
@@ -319,7 +313,7 @@ impl TisTransport {
         self.write_byte(reg::DATA_FIFO, data[last_byte_index]);
         self.mmio_delay();
 
-        info!("TIS: waiting for EXPECT to clear");
+        trace!("TIS: waiting for EXPECT to clear");
         let sts = self.wait_for_status(sts::STS_VALID, MAX_POLL_LOOPS)?;
         if (sts & sts::EXPECT) != 0 {
             warn!(
@@ -331,13 +325,13 @@ impl TisTransport {
             )));
         }
 
-        info!("TIS: EXPECT cleared, STS = 0x{:02x}", sts);
+        trace!("TIS: EXPECT cleared, STS = 0x{:02x}", sts);
         Ok(())
     }
 
     /// Triggers command execution.
     fn trigger_command(&self) {
-        info!("TIS: triggering command execution");
+        debug!("TIS: triggering command execution");
         // Write GO bit to start command execution
         self.write_byte(reg::STS, sts::TPM_GO);
         self.mmio_delay();
@@ -353,14 +347,13 @@ impl TisTransport {
             MAX_RESPONSE_START_POLL_LOOPS,
         ) {
             Ok(sts) => {
-                info!("TIS: data available, STS = 0x{:02x}", sts);
+                trace!("TIS: data available, STS = 0x{:02x}", sts);
                 Ok(())
             }
             Err(err) => {
-                warn!(
-                    "TIS: data available timeout, STS = 0x{:02x}",
-                    self.read_status_byte()
-                );
+                if let Ok(sts) = self.read_status_byte() {
+                    warn!("TIS: data available timeout, STS = 0x{:02x}", sts);
+                }
                 Err(err)
             }
         }
@@ -376,7 +369,7 @@ impl TisTransport {
             let burst = self.wait_for_burst_count()?;
             let chunk_len = core::cmp::min(burst, count - offset);
             for i in 0..chunk_len {
-                let byte = self.read_byte(reg::DATA_FIFO);
+                let byte = self.read_byte(reg::DATA_FIFO)?;
                 if offset == 0 && i == 0 {
                     debug!("TIS: first response byte = 0x{:02x}", byte);
                 }
@@ -402,11 +395,11 @@ impl TisTransport {
             self.read_from_fifo(10),
             "timed out while reading TPM response header from FIFO",
         )?;
-        info!("TIS: response header: {:?}", &header[..10]);
+        debug!("TIS: response header: {:?}", &header[..10]);
 
         // Parse response size (big-endian u32 at offset 2).
         let size = u32::from_be_bytes([header[2], header[3], header[4], header[5]]) as usize;
-        info!("TIS: response size from header: {}", size);
+        debug!("TIS: response size from header: {}", size);
 
         if size < 10 {
             return Err(TpmError::Transport(TransportError::Generic(
@@ -451,14 +444,14 @@ impl TisTransport {
             "timed out returning TPM to command-ready after response",
         )?;
 
-        info!("TIS: read {} byte response", response.len());
+        debug!("TIS: read {} byte response", response.len());
         Ok(response)
     }
 }
 
 impl TpmTransport for TisTransport {
     fn send(&self, cmd: &[u8]) -> Result<(), TpmError> {
-        info!("TIS: sending {} byte command", cmd.len());
+        debug!("TIS: sending {} byte command", cmd.len());
 
         let result = (|| {
             self.request_locality()?;

@@ -32,8 +32,8 @@ use log::{error, info, warn};
 use ostd::io::IoMem;
 pub use space::{TpmSpace, TpmSpaceManager};
 use spin::Once;
-pub use transport::TpmTransport;
 use transport::tis::TisTransport;
+pub use transport::TpmTransport;
 
 /// Global TPM chip instance.
 static TPM_CHIP: Once<Arc<TpmChip>> = Once::new();
@@ -55,7 +55,27 @@ pub fn init(base_addr: u64, size: usize) -> Result<(), TpmError> {
         base_addr, size
     );
 
-    let io_mem = match IoMem::acquire(base_addr as usize..(base_addr as usize + size)) {
+    let Ok(start) = usize::try_from(base_addr) else {
+        error!(
+            "TPM: invalid MMIO base address (does not fit in usize): 0x{:016x}",
+            base_addr
+        );
+        return Err(TpmError::Transport(
+            crate::error::TransportError::MmioAccess,
+        ));
+    };
+
+    let Some(end) = start.checked_add(size) else {
+        error!(
+            "TPM: invalid MMIO region (base=0x{:016x}, size={}) - address overflow",
+            base_addr, size
+        );
+        return Err(TpmError::Transport(
+            crate::error::TransportError::MmioAccess,
+        ));
+    };
+
+    let io_mem = match IoMem::acquire(start..end) {
         Ok(mem) => mem,
         Err(e) => {
             error!("TPM: MMIO acquire failed: {:?}", e);
@@ -69,14 +89,14 @@ pub fn init(base_addr: u64, size: usize) -> Result<(), TpmError> {
     info!("TPM: trying TIS/FIFO interface");
     let tis_transport = TisTransport::new(io_mem);
 
-    if !tis_transport.is_device_valid() {
+    if !tis_transport.is_device_valid()? {
         error!("TPM: TIS device not valid");
         return Err(TpmError::Transport(
             crate::error::TransportError::DeviceNotResponding,
         ));
     }
 
-    let (did, vid) = tis_transport.get_did_vid();
+    let (did, vid) = tis_transport.get_did_vid()?;
     info!(
         "TPM: TIS device detected (DID=0x{:04x}, VID=0x{:04x})",
         did, vid

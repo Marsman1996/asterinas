@@ -369,35 +369,59 @@ impl InodeIo for TpmRmFile {
         // TPM2_StartAuthSession command code is 0x00000176
         if read_len >= 10 {
             let cmd_code = u32::from_be_bytes([cmd_buf[6], cmd_buf[7], cmd_buf[8], cmd_buf[9]]);
-            if cmd_code == TPM2_CC_START_AUTH_SESSION && response.len() >= 14 {
-                // Parse session handle from response (first 4 bytes of body)
-                let handle =
-                    u32::from_be_bytes([response[10], response[11], response[12], response[13]]);
-                if handle != 0 {
-                    self.space.track_session(handle);
-                }
-            }
+            let response_code = if response.len() >= 10 {
+                Some(u32::from_be_bytes([
+                    response[6],
+                    response[7],
+                    response[8],
+                    response[9],
+                ]))
+            } else {
+                None
+            };
 
-            if (cmd_code == TPM2_CC_CREATE_PRIMARY
-                || cmd_code == TPM2_CC_LOAD
-                || cmd_code == TPM2_CC_CONTEXT_LOAD)
-                && response.len() >= 14
-            {
-                let handle =
-                    u32::from_be_bytes([response[10], response[11], response[12], response[13]]);
-                if (TPM_TRANSIENT_HANDLE_START..=TPM_TRANSIENT_HANDLE_END).contains(&handle) {
-                    self.space.track_object(handle);
-                } else if (TPM_HMAC_SESSION_HANDLE_START..=TPM_HMAC_SESSION_HANDLE_END)
-                    .contains(&handle)
-                    || (TPM_POLICY_SESSION_HANDLE_START..=TPM_POLICY_SESSION_HANDLE_END)
-                        .contains(&handle)
+            if response_code == Some(0) {
+                if cmd_code == TPM2_CC_START_AUTH_SESSION && response.len() >= 14 {
+                    // Parse session handle from response (first 4 bytes of body)
+                    let handle = u32::from_be_bytes([
+                        response[10],
+                        response[11],
+                        response[12],
+                        response[13],
+                    ]);
+                    if handle != 0 {
+                        self.space.track_session(handle);
+                    }
+                }
+
+                if (cmd_code == TPM2_CC_CREATE_PRIMARY
+                    || cmd_code == TPM2_CC_LOAD
+                    || cmd_code == TPM2_CC_CONTEXT_LOAD)
+                    && response.len() >= 14
                 {
-                    self.space.track_session(handle);
+                    let handle = u32::from_be_bytes([
+                        response[10],
+                        response[11],
+                        response[12],
+                        response[13],
+                    ]);
+                    if (TPM_TRANSIENT_HANDLE_START..=TPM_TRANSIENT_HANDLE_END).contains(&handle) {
+                        self.space.track_object(handle);
+                    } else if (TPM_HMAC_SESSION_HANDLE_START..=TPM_HMAC_SESSION_HANDLE_END)
+                        .contains(&handle)
+                        || (TPM_POLICY_SESSION_HANDLE_START..=TPM_POLICY_SESSION_HANDLE_END)
+                            .contains(&handle)
+                    {
+                        self.space.track_session(handle);
+                    }
                 }
             }
 
             // Check if this was a FlushContext command and untrack the flushed handle.
-            if cmd_code == TPM2_CC_FLUSH_CONTEXT && read_len >= 14 {
+            if cmd_code == TPM2_CC_FLUSH_CONTEXT
+                && read_len >= 14
+                && response_code == Some(0)
+            {
                 // Parse handle from command (bytes 10-13)
                 let handle =
                     u32::from_be_bytes([cmd_buf[10], cmd_buf[11], cmd_buf[12], cmd_buf[13]]);

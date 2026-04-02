@@ -106,6 +106,8 @@ pub mod pcr {
 
 /// TPM 2.0 session types.
 pub mod session {
+    /// Password authorization session handle.
+    pub const TPM_RS_PW: u32 = 0x40000009;
     /// HMAC session type.
     pub const TPM_SE_HMAC: u8 = 0x00;
     /// Policy session type.

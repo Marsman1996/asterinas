@@ -19,7 +19,7 @@ use crate::{
             parse_context_save_response, parse_flush_context_response,
             parse_get_capability_response, parse_get_random_response, parse_pcr_read_response,
             parse_policy_get_digest_response, parse_start_auth_session_response,
-            ContextLoadResponse, GetCapabilityResponse, PcrReadResponse, StartAuthSessionResponse,
+            ContextLoadResponse, GetCapabilityResponse, PcrReadResponse,
         },
         constants::{alg, capability, handle, pcr, property, rc, session, startup, tag},
         header::{TpmCommandHeader, TpmResponseHeader, TPM_HEADER_SIZE},
@@ -799,6 +799,11 @@ impl TpmChip {
                 .copied()
                 .unwrap_or(logical_handle);
             self.flush_context(real_handle)?;
+        } else if matches!(
+            TpmResourceType::from_handle(logical_handle),
+            Some(TpmResourceType::HmacSession | TpmResourceType::PolicySession)
+        ) {
+            space.untrack_session(logical_handle);
         }
 
         Ok(())
@@ -902,14 +907,6 @@ impl TpmChip {
         }
 
         for logical_handle in space.session_handles() {
-            if space
-                .resource_manager()
-                .get_context_blob(logical_handle)
-                .is_some()
-            {
-                continue;
-            }
-
             if let Err(err) = self.flush_context(logical_handle) {
                 warn!(
                     "TPM: failed to flush session 0x{:08x} while closing space {}: {:?}",

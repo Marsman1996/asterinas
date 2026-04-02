@@ -781,8 +781,8 @@ pub fn build_nv_define_space_command(
     let nv_public_size = (params.len() - nv_public_start - 2) as u16;
     params[nv_public_start..nv_public_start + 2].copy_from_slice(&nv_public_size.to_be_bytes());
 
-    // auth (TPMS_AUTH_COMMAND) - empty for no auth
-    write_u32_be(&mut params, 0); // sessionHandle (TPM_RS_PW = 0x40000009)
+    // auth (TPMS_AUTH_COMMAND) - password session with empty authValue
+    write_u32_be(&mut params, session::TPM_RS_PW); // sessionHandle (TPM_RS_PW)
     write_u16_be(&mut params, 0); // nonce size
     write_u8(&mut params, 0); // sessionAttributes
     write_u16_be(&mut params, 0); // hmac size
@@ -906,7 +906,7 @@ mod tests {
     fn test_get_capability_command_round_trip() {
         let cmd = build_get_capability_command(
             capability::TPM_CAP_TPM_PROPERTIES,
-            property::TPM_PT_MANUFACTURER,
+            crate::protocol::constants::property::TPM_PT_MANUFACTURER,
             1,
         );
 

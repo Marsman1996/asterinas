@@ -29,11 +29,11 @@ pub static TPM_BASE_ADDR: Once<HexAddr> = Once::new();
 
 aster_cmdline::define_kv_param!("tpm_base", TPM_BASE_ADDR);
 
-/// Standard QEMU/VM TPM CRB base address.
-const QEMU_TPM_BASE: u64 = 0xfed40000;
+/// Standard QEMU/VM TPM MMIO base address.
+const QEMU_TPM_MMIO_BASE: u64 = 0xfed40000;
 
-/// CRB MMIO region size.
-const CRB_REGION_SIZE: usize = 0x10000;
+/// TPM MMIO region size.
+const TPM_MMIO_REGION_SIZE: usize = 0x10000;
 
 pub fn init() {
     for device in aster_input::all_devices() {
@@ -56,12 +56,12 @@ pub fn init() {
         hex_addr.0
     } else {
         // Try standard QEMU TPM address if not specified
-        QEMU_TPM_BASE
+        QEMU_TPM_MMIO_BASE
     };
 
     if tpm_base != 0 {
-        info!("TPM: probing CRB device at 0x{:016x}", tpm_base);
-        match aster_tpm::init(tpm_base, CRB_REGION_SIZE) {
+        info!("TPM: probing MMIO TPM device at 0x{:016x}", tpm_base);
+        match aster_tpm::init(tpm_base, TPM_MMIO_REGION_SIZE) {
             Ok(()) => {
                 info!("TPM: initialization successful");
             }

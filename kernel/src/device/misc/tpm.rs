@@ -332,11 +332,19 @@ impl InodeIo for TpmFile {
         if read_len >= 10 {
             let cmd_code = u32::from_be_bytes([cmd_buf[6], cmd_buf[7], cmd_buf[8], cmd_buf[9]]);
             if cmd_code == 0x00000176 && response.len() >= 14 {
-                // Parse session handle from response (first 4 bytes of body)
-                let handle =
-                    u32::from_be_bytes([response[10], response[11], response[12], response[13]]);
-                if handle != 0 {
-                    self.track_session(handle);
+                let resp_code =
+                    u32::from_be_bytes([response[6], response[7], response[8], response[9]]);
+                if resp_code == 0 {
+                    // Parse session handle from response (first 4 bytes of body)
+                    let handle = u32::from_be_bytes([
+                        response[10],
+                        response[11],
+                        response[12],
+                        response[13],
+                    ]);
+                    if handle != 0 {
+                        self.track_session(handle);
+                    }
                 }
             }
         }

@@ -279,26 +279,35 @@ impl TpmTransport for CrbTransport {
         // Acquire locality.
         self.request_locality()?;
 
-        // Write command.
-        self.write_command(cmd)?;
+        let result = (|| {
+            // Write command.
+            self.write_command(cmd)?;
 
-        // Trigger execution.
-        self.trigger_start();
+            // Trigger execution.
+            self.trigger_start();
 
-        Ok(())
+            Ok(())
+        })();
+
+        if result.is_err() {
+            self.release_locality();
+        }
+
+        result
     }
 
     fn recv(&self) -> Result<Vec<u8>, TpmError> {
-        // Wait for completion.
-        self.wait_completion()?;
+        let result = (|| {
+            // Wait for completion.
+            self.wait_completion()?;
 
-        // Read response.
-        let response = self.read_response()?;
+            // Read response.
+            self.read_response()
+        })();
 
-        // Release locality.
         self.release_locality();
 
-        Ok(response)
+        result
     }
 }
 

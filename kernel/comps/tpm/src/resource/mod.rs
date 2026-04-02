@@ -319,9 +319,12 @@ impl TpmResourceManager {
         self.handle_virtualizer.remove_by_virtual(virtual_handle)
     }
 
-    /// Allocates a new resource handle for the given type.
+    /// Allocates a new logical resource handle.
     ///
-    /// Returns a unique handle within the type's range.
+    /// The current implementation uses a single monotonically increasing
+    /// logical handle namespace for tracked resources. The `resource_type`
+    /// parameter is recorded for bookkeeping and diagnostics, but does not yet
+    /// select a per-type allocation range.
     pub fn allocate_handle(&self, resource_type: TpmResourceType) -> TpmResourceHandle {
         let mut next = self.next_handle.lock();
         let handle = *next;

@@ -11,7 +11,7 @@ use alloc::{sync::Arc, vec::Vec};
 
 use aster_tpm::{TpmChip, TpmSpace, TpmSpaceManager};
 use device_id::{DeviceId, MinorId};
-use log::{debug, error, info, warn};
+use log::{debug, error, info};
 use ostd::mm::{Infallible, VmReader, VmWriter};
 
 use crate::{
@@ -418,10 +418,7 @@ impl InodeIo for TpmRmFile {
             }
 
             // Check if this was a FlushContext command and untrack the flushed handle.
-            if cmd_code == TPM2_CC_FLUSH_CONTEXT
-                && read_len >= 14
-                && response_code == Some(0)
-            {
+            if cmd_code == TPM2_CC_FLUSH_CONTEXT && read_len >= 14 && response_code == Some(0) {
                 // Parse handle from command (bytes 10-13)
                 let handle =
                     u32::from_be_bytes([cmd_buf[10], cmd_buf[11], cmd_buf[12], cmd_buf[13]]);

@@ -104,21 +104,25 @@ impl CrbTransport {
     }
 
     /// Reads a 32-bit register at the given offset.
-    fn read_reg32(&self, offset: usize) -> u32 {
-        self.io_mem.read_once::<u32>(offset).unwrap_or(0)
+    fn read_reg32(&self, offset: usize) -> Result<u32, TpmError> {
+        self.io_mem
+            .read_once::<u32>(offset)
+            .map_err(|_| TpmError::Transport(TransportError::MmioAccess))
     }
 
     /// Writes a 32-bit register at the given offset.
-    fn write_reg32(&self, offset: usize, value: u32) {
-        let _ = self.io_mem.write_once::<u32>(offset, &value);
+    fn write_reg32(&self, offset: usize, value: u32) -> Result<(), TpmError> {
+        self.io_mem
+            .write_once::<u32>(offset, &value)
+            .map_err(|_| TpmError::Transport(TransportError::MmioAccess))
     }
 
     /// Checks if the TPM device is present and valid.
     ///
     /// Returns true if the TPM_REG_VALID_STS bit is set in the status register.
-    pub fn is_device_valid(&self) -> bool {
-        let sts = self.read_reg32(reg::CTRL_STS);
-        sts & sts::TPM_REG_VALID_STS != 0
+    pub fn is_device_valid(&self) -> Result<bool, TpmError> {
+        let sts = self.read_reg32(reg::CTRL_STS)?;
+        Ok(sts & sts::TPM_REG_VALID_STS != 0)
     }
 
     /// Requests locality 0 for command execution.
@@ -126,20 +130,20 @@ impl CrbTransport {
     /// In CRB mode, locality 0 is typically always available.
     fn request_locality(&self) -> Result<(), TpmError> {
         // Check if TPM register space is valid.
-        if !self.is_device_valid() {
+        if !self.is_device_valid()? {
             return Err(TpmError::Transport(TransportError::DeviceNotResponding));
         }
 
         // In CRB mode, check if we're already in idle state.
         // If not idle, try to go idle first.
-        let sts = self.read_reg32(reg::CTRL_STS);
+        let sts = self.read_reg32(reg::CTRL_STS)?;
         if sts & sts::TPM_IDLE == 0 {
             // Not idle, try to request locality.
-            self.write_reg32(reg::CTRL_REQUEST, req::LOCALITY_0);
+            self.write_reg32(reg::CTRL_REQUEST, req::LOCALITY_0)?;
 
             // Wait for locality to be assigned.
             for _ in 0..MAX_POLL_ITERATIONS {
-                let sts = self.read_reg32(reg::CTRL_STS);
+                let sts = self.read_reg32(reg::CTRL_STS)?;
                 if sts & sts::LOCALITY_ASSIGNED != 0 {
                     return Ok(());
                 }
@@ -149,11 +153,11 @@ impl CrbTransport {
         }
 
         // Already idle, just request locality.
-        self.write_reg32(reg::CTRL_REQUEST, req::LOCALITY_0);
+        self.write_reg32(reg::CTRL_REQUEST, req::LOCALITY_0)?;
 
         // Wait for locality to be assigned.
         for _ in 0..MAX_POLL_ITERATIONS {
-            let sts = self.read_reg32(reg::CTRL_STS);
+            let sts = self.read_reg32(reg::CTRL_STS)?;
             if sts & sts::LOCALITY_ASSIGNED != 0 {
                 return Ok(());
             }
@@ -166,13 +170,13 @@ impl CrbTransport {
     /// Releases locality 0.
     fn release_locality(&self) {
         // Request to go idle.
-        self.write_reg32(reg::CTRL_REQUEST, req::GO_IDLE);
+        let _ = self.write_reg32(reg::CTRL_REQUEST, req::GO_IDLE);
     }
 
     /// Waits for the TPM to be in idle state.
     fn wait_for_idle(&self) -> Result<(), TpmError> {
         for _ in 0..MAX_POLL_ITERATIONS {
-            let sts = self.read_reg32(reg::CTRL_STS);
+            let sts = self.read_reg32(reg::CTRL_STS)?;
             if sts & sts::TPM_IDLE != 0 {
                 return Ok(());
             }
@@ -183,7 +187,7 @@ impl CrbTransport {
 
     /// Writes command data to the command buffer.
     fn write_command(&self, cmd: &[u8]) -> Result<(), TpmError> {
-        let cmd_size = self.read_reg32(reg::CTRL_CMD_SIZE) as usize;
+        let cmd_size = self.read_reg32(reg::CTRL_CMD_SIZE)? as usize;
 
         if cmd.len() > cmd_size {
             return Err(TpmError::Transport(TransportError::Generic(
@@ -196,24 +200,24 @@ impl CrbTransport {
 
         // Write command to CRB data buffer.
         for (i, &byte) in cmd.iter().enumerate() {
-            let _ = self
-                .io_mem
-                .write_once::<u8>(CRB_DATA_BUFFER_OFFSET + i, &byte);
+            self.io_mem
+                .write_once::<u8>(CRB_DATA_BUFFER_OFFSET + i, &byte)
+                .map_err(|_| TpmError::Transport(TransportError::MmioAccess))?;
         }
 
         Ok(())
     }
 
     /// Triggers command execution.
-    fn trigger_start(&self) {
-        self.write_reg32(reg::CTRL_START, start::START);
+    fn trigger_start(&self) -> Result<(), TpmError> {
+        self.write_reg32(reg::CTRL_START, start::START)
     }
 
     /// Waits for command completion.
     fn wait_completion(&self) -> Result<(), TpmError> {
         // After triggering start, wait for TPM to return to idle.
         for _ in 0..MAX_POLL_ITERATIONS {
-            let sts = self.read_reg32(reg::CTRL_STS);
+            let sts = self.read_reg32(reg::CTRL_STS)?;
             // TPM returns to idle when command completes.
             if sts & sts::TPM_IDLE != 0 {
                 return Ok(());
@@ -226,7 +230,7 @@ impl CrbTransport {
     /// Reads response data from the response buffer.
     fn read_response(&self) -> Result<Vec<u8>, TpmError> {
         // Get response buffer size.
-        let rsp_size = self.read_reg32(reg::CTRL_RSP_SIZE) as usize;
+        let rsp_size = self.read_reg32(reg::CTRL_RSP_SIZE)? as usize;
 
         if rsp_size == 0 {
             return Err(TpmError::Transport(TransportError::Generic(
@@ -240,7 +244,7 @@ impl CrbTransport {
             *byte = self
                 .io_mem
                 .read_once::<u8>(CRB_DATA_BUFFER_OFFSET + i)
-                .unwrap_or(0);
+                .map_err(|_| TpmError::Transport(TransportError::MmioAccess))?;
         }
 
         // Parse response size from header (big-endian u32 at offset 2).
@@ -267,7 +271,7 @@ impl CrbTransport {
             *byte = self
                 .io_mem
                 .read_once::<u8>(CRB_DATA_BUFFER_OFFSET + i)
-                .unwrap_or(0);
+                .map_err(|_| TpmError::Transport(TransportError::MmioAccess))?;
         }
 
         Ok(response)
@@ -284,7 +288,7 @@ impl TpmTransport for CrbTransport {
             self.write_command(cmd)?;
 
             // Trigger execution.
-            self.trigger_start();
+            self.trigger_start()?;
 
             Ok(())
         })();

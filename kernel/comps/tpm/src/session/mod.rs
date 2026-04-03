@@ -10,8 +10,8 @@ use alloc::{collections::BTreeMap, vec, vec::Vec};
 use log::{debug, info};
 
 use crate::{
-    resource::{TpmResourceHandle, TpmResourceType},
     TpmChip,
+    resource::{TpmResourceHandle, TpmResourceType},
 };
 
 /// Types of TPM sessions.

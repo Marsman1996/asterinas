@@ -8,6 +8,7 @@
 use alloc::{collections::BTreeMap, sync::Arc, vec::Vec};
 
 use log::{debug, info};
+use ostd::sync::Mutex as SleepMutex;
 use spin::Mutex;
 
 use crate::resource::{TpmResource, TpmResourceHandle, TpmResourceManager, TpmResourceType};
@@ -46,6 +47,8 @@ pub(crate) struct TpmObjectEntry {
 pub struct TpmSpace {
     /// Unique identifier for this space.
     id: TpmSpaceId,
+    /// Serializes the full command lifecycle within this space.
+    transaction_lock: SleepMutex<()>,
     /// Resource manager for this space.
     resource_manager: Arc<TpmResourceManager>,
     /// Session table for this space.
@@ -87,6 +90,7 @@ impl TpmSpace {
         debug!("TPM: creating space with id {}", id);
         Self {
             id,
+            transaction_lock: SleepMutex::new(()),
             resource_manager: Arc::new(TpmResourceManager::new()),
             session_table: Mutex::new(BTreeMap::new()),
             object_table: Mutex::new(BTreeMap::new()),
@@ -97,6 +101,11 @@ impl TpmSpace {
     /// Returns the space ID.
     pub fn id(&self) -> TpmSpaceId {
         self.id
+    }
+
+    /// Returns the transaction lock for this space.
+    pub(crate) fn transaction_lock(&self) -> &SleepMutex<()> {
+        &self.transaction_lock
     }
 
     /// Returns a reference to the resource manager.
@@ -1358,9 +1367,11 @@ mod tests {
             space.object_real_handle(logical_handle),
             Some(loaded_handle)
         );
-        assert!(space
-            .object_entry(logical_handle)
-            .is_some_and(|entry| entry.externally_loaded));
+        assert!(
+            space
+                .object_entry(logical_handle)
+                .is_some_and(|entry| entry.externally_loaded)
+        );
         assert!(space.object_context_blob(logical_handle).is_none());
     }
 
@@ -1386,9 +1397,11 @@ mod tests {
             space.object_real_handle(returned_handle),
             Some(loaded_handle)
         );
-        assert!(space
-            .object_entry(returned_handle)
-            .is_some_and(|entry| entry.externally_loaded));
+        assert!(
+            space
+                .object_entry(returned_handle)
+                .is_some_and(|entry| entry.externally_loaded)
+        );
     }
 
     #[test]
@@ -1421,14 +1434,18 @@ mod tests {
             .finish_explicit_object_context_load(logical_handle, first_real_handle, true, true)
             .expect("known object load should succeed");
         assert_eq!(returned_handle, logical_handle);
-        assert!(space
-            .object_entry(logical_handle)
-            .is_some_and(|entry| entry.externally_loaded));
+        assert!(
+            space
+                .object_entry(logical_handle)
+                .is_some_and(|entry| entry.externally_loaded)
+        );
 
         space.mark_object_saved(logical_handle);
-        assert!(!space
-            .object_entry(logical_handle)
-            .is_some_and(|entry| entry.externally_loaded));
+        assert!(
+            !space
+                .object_entry(logical_handle)
+                .is_some_and(|entry| entry.externally_loaded)
+        );
 
         space.mark_object_loaded_with_real(logical_handle, second_real_handle);
         let entry = space

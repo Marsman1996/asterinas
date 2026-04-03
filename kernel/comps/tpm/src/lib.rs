@@ -32,8 +32,8 @@ use log::{error, info, warn};
 use ostd::io::IoMem;
 pub use space::{TpmSpace, TpmSpaceManager};
 use spin::Once;
-use transport::tis::TisTransport;
 pub use transport::TpmTransport;
+use transport::tis::TisTransport;
 
 /// Global TPM chip instance.
 static TPM_CHIP: Once<Arc<TpmChip>> = Once::new();

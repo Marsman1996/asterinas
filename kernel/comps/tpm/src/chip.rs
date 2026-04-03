@@ -12,6 +12,7 @@ use crate::{
     error::{BufferError, TpmError, TransportError},
     protocol::{
         commands::{
+            ContextLoadResponse, GetCapabilityResponse, PcrReadResponse,
             build_context_load_command, build_context_save_command, build_flush_context_command,
             build_get_capability_command, build_get_random_command, build_nv_read_public_command,
             build_pcr_read_command, build_policy_get_digest_command, build_policy_pcr_command,
@@ -19,10 +20,9 @@ use crate::{
             parse_context_save_response, parse_flush_context_response,
             parse_get_capability_response, parse_get_random_response, parse_pcr_read_response,
             parse_policy_get_digest_response, parse_start_auth_session_response,
-            ContextLoadResponse, GetCapabilityResponse, PcrReadResponse,
         },
         constants::{alg, capability, handle, pcr, property, rc, session, startup, tag},
-        header::{read_u16_be, read_u32_be, TpmCommandHeader, TpmResponseHeader, TPM_HEADER_SIZE},
+        header::{TPM_HEADER_SIZE, TpmCommandHeader, TpmResponseHeader, read_u16_be, read_u32_be},
     },
     resource::{TpmResource, TpmResourceManager, TpmResourceType},
     session::{TpmSession, TpmSessionManager, TpmSessionType},
@@ -1412,6 +1412,8 @@ impl TpmChip {
     }
 
     pub fn close_space(&self, space: &TpmSpace) {
+        let _space_guard = space.transaction_lock().lock();
+
         for logical_handle in space.loaded_object_handles() {
             let real_handle = space
                 .object_real_handle(logical_handle)
@@ -1486,6 +1488,7 @@ impl TpmChip {
         space: &TpmSpace,
     ) -> Result<Vec<u8>, TpmError> {
         debug!("TPM: executing command in space context");
+        let _space_guard = space.transaction_lock().lock();
 
         let mut translated_cmd = cmd.to_vec();
         let command_code = Self::command_code(cmd).unwrap_or(0);

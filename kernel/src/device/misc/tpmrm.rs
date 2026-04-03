@@ -12,7 +12,10 @@ use alloc::{sync::Arc, vec::Vec};
 use aster_tpm::{TpmChip, TpmSpace, TpmSpaceManager};
 use device_id::{DeviceId, MinorId};
 use log::{debug, error, info};
-use ostd::mm::{Infallible, VmReader, VmWriter};
+use ostd::{
+    mm::{Infallible, VmReader, VmWriter},
+    sync::Mutex as SleepMutex,
+};
 
 use crate::{
     device::{Device, DeviceType},
@@ -174,6 +177,8 @@ impl Device for TpmRmDevice {
 struct TpmRmFile {
     /// The TPM space for this file handle.
     space: Arc<TpmSpace>,
+    /// Serializes per-file command/response transactions like Linux `buffer_mutex`.
+    buffer_mutex: SleepMutex<()>,
     /// Response buffer with partial read support.
     response_buffer: spin::Mutex<TpmRmResponseBuffer>,
     /// Poll notification state for response-buffer transitions.
@@ -192,6 +197,7 @@ impl TpmRmFile {
     fn new(space: Arc<TpmSpace>) -> Result<Self> {
         Ok(Self {
             space,
+            buffer_mutex: SleepMutex::new(()),
             response_buffer: spin::Mutex::new(TpmRmResponseBuffer::new()),
             pollee: Pollee::new(),
         })
@@ -206,16 +212,9 @@ impl TpmRmFile {
         events
     }
 
-    /// Clears any buffered TPM response and invalidates readable events if needed.
-    fn clear_response(&self) {
-        let mut response = self.response_buffer.lock();
-        let had_bytes = response.remaining() > 0;
-        response.clear();
-        drop(response);
-
-        if had_bytes {
-            self.pollee.invalidate();
-        }
+    /// Returns true if a prior command response is still waiting to be read.
+    fn has_pending_response(&self) -> bool {
+        self.response_buffer.lock().remaining() > 0
     }
 
     /// Stores a new TPM response and wakes readers.
@@ -284,9 +283,13 @@ impl InodeIo for TpmRmFile {
         }
 
         if status_flags.contains(StatusFlags::O_NONBLOCK) {
+            let _buffer_guard = self.buffer_mutex.lock();
             self.try_read_response(writer)
         } else {
-            self.wait_events(IoEvents::IN, None, || self.try_read_response(writer))
+            self.wait_events(IoEvents::IN, None, || {
+                let _buffer_guard = self.buffer_mutex.lock();
+                self.try_read_response(writer)
+            })
         }
     }
 
@@ -300,8 +303,13 @@ impl InodeIo for TpmRmFile {
             .get()
             .ok_or_else(|| Error::with_message(Errno::ENODEV, "No TPM chip registered"))?;
 
-        // Clear previous response before new command.
-        self.clear_response();
+        let _buffer_guard = self.buffer_mutex.lock();
+        if self.has_pending_response() {
+            return Err(Error::with_message(
+                Errno::EBUSY,
+                "previous TPM response has not been fully read",
+            ));
+        }
 
         if reader.remain() > MAX_TPM_COMMAND_SIZE {
             return Err(Error::with_message(

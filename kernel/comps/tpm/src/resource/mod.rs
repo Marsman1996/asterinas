@@ -672,13 +672,17 @@ mod tests {
         let manager = TpmResourceManager::new();
         let handle = manager.create_resource(TpmResourceType::HmacSession, vec![]);
 
-        assert!(manager
-            .get_resource_with_type(handle, TpmResourceType::HmacSession)
-            .is_some());
+        assert!(
+            manager
+                .get_resource_with_type(handle, TpmResourceType::HmacSession)
+                .is_some()
+        );
 
-        assert!(manager
-            .get_resource_with_type(handle, TpmResourceType::PolicySession)
-            .is_none());
+        assert!(
+            manager
+                .get_resource_with_type(handle, TpmResourceType::PolicySession)
+                .is_none()
+        );
     }
 
     #[test]

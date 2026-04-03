@@ -9,8 +9,8 @@ use crate::{
     protocol::{
         constants::{alg, capability, command, pcr, random, session, tag},
         header::{
-            read_u16_be, read_u32_be, response_body, write_u16_be, write_u32_be, TpmCommandHeader,
-            TpmResponseHeader, TPM_HEADER_SIZE,
+            TPM_HEADER_SIZE, TpmCommandHeader, TpmResponseHeader, read_u16_be, read_u32_be,
+            response_body, write_u16_be, write_u32_be,
         },
     },
 };

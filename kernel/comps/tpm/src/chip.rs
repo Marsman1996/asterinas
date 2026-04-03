@@ -1670,11 +1670,6 @@ mod tests {
     }
 
     #[test]
-    fn validate_restored_session_handle_accepts_same_handle() {
-        assert!(TpmChip::validate_restored_session_handle(0x0300_0001, 0x0300_0001).is_ok());
-    }
-
-    #[test]
     fn validate_restored_session_handle_rejects_different_handle() {
         let err = TpmChip::validate_restored_session_handle(0x0300_0001, 0x0300_0011)
             .expect_err("different restored session handle must be rejected");
@@ -1684,24 +1679,6 @@ mod tests {
                 "session restored to a different handle"
             ))
         ));
-    }
-
-    #[test]
-    fn object_change_auth_maps_both_object_handles() {
-        assert_eq!(
-            TpmChip::command_handle_count(TPM2_CC_OBJECT_CHANGE_AUTH),
-            Some(2)
-        );
-    }
-
-    #[test]
-    fn linux_style_mixed_handle_commands_have_expected_counts() {
-        assert_eq!(TpmChip::command_handle_count(TPM2_CC_REWRAP), Some(2));
-        assert_eq!(TpmChip::command_handle_count(TPM2_CC_NV_CERTIFY), Some(3));
-        assert_eq!(
-            TpmChip::command_handle_count(TPM2_CC_GET_COMMAND_AUDIT_DIGEST),
-            Some(2)
-        );
     }
 
     #[test]

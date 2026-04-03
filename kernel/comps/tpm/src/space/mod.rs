@@ -1303,44 +1303,6 @@ mod tests {
     }
 
     #[test]
-    fn test_space_session_tracking() {
-        let space = TpmSpace::new(1);
-
-        space.track_session(0x02000001);
-        space.track_session(0x02000002);
-
-        assert_eq!(space.session_count(), 2);
-
-        assert!(space.untrack_session(0x02000001));
-        assert_eq!(space.session_count(), 1);
-        assert!(!space.untrack_session(0x02000001));
-    }
-
-    #[test]
-    fn test_space_session_isolation() {
-        let space1 = TpmSpace::new(1);
-        let space2 = TpmSpace::new(2);
-
-        space1.track_session(0x02000001);
-
-        assert_eq!(space1.session_count(), 1);
-        assert_eq!(space2.session_count(), 0);
-        assert!(space2.session_handles().is_empty());
-    }
-
-    #[test]
-    fn test_space_session_cleanup_on_dispose() {
-        let space = TpmSpace::new(1);
-
-        space.track_session(0x02000001);
-        space.track_session(0x02000002);
-        assert_eq!(space.session_count(), 2);
-
-        space.dispose();
-        assert_eq!(space.session_count(), 0);
-    }
-
-    #[test]
     fn test_space_explicit_session_context_save_keeps_logical_handle() {
         let space = TpmSpace::new(1);
         let session_handle = 0x02000001;

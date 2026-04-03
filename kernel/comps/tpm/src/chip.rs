@@ -9,7 +9,7 @@ use log::{debug, error, info, warn};
 use ostd::sync::Mutex;
 
 use crate::{
-    error::{BufferError, TpmError},
+    error::{BufferError, TpmError, TransportError},
     protocol::{
         commands::{
             build_context_load_command, build_context_save_command, build_flush_context_command,
@@ -22,7 +22,7 @@ use crate::{
             ContextLoadResponse, GetCapabilityResponse, PcrReadResponse,
         },
         constants::{alg, capability, handle, pcr, property, rc, session, startup, tag},
-        header::{TpmCommandHeader, TpmResponseHeader, TPM_HEADER_SIZE},
+        header::{read_u16_be, read_u32_be, TpmCommandHeader, TpmResponseHeader, TPM_HEADER_SIZE},
     },
     resource::{TpmResource, TpmResourceManager, TpmResourceType},
     session::{TpmSession, TpmSessionManager, TpmSessionType},
@@ -69,17 +69,68 @@ pub struct TpmChip {
 
 const TPM2_CC_CREATE_PRIMARY: u32 = 0x0000_0131;
 const TPM2_CC_EVICT_CONTROL: u32 = 0x0000_0120;
+const TPM2_CC_SEQUENCE_COMPLETE: u32 = 0x0000_013E;
+const TPM2_CC_ACTIVATE_CREDENTIAL: u32 = 0x0000_0147;
+const TPM2_CC_CERTIFY: u32 = 0x0000_0148;
+const TPM2_CC_POLICY_NV: u32 = 0x0000_0149;
 const TPM2_CC_CREATE: u32 = 0x0000_0153;
+const TPM2_CC_CERTIFY_CREATION: u32 = 0x0000_014A;
+const TPM2_CC_DUPLICATE: u32 = 0x0000_014B;
+const TPM2_CC_GET_COMMAND_AUDIT_DIGEST: u32 = 0x0000_0133;
+const TPM2_CC_GET_TIME: u32 = 0x0000_014C;
+const TPM2_CC_GET_SESSION_AUDIT_DIGEST: u32 = 0x0000_014D;
+const TPM2_CC_NV_CERTIFY: u32 = 0x0000_0184;
+const TPM2_CC_GET_CAPABILITY: u32 = 0x0000_017A;
+const TPM2_CC_ECDH_ZGEN: u32 = 0x0000_0154;
 const TPM2_CC_HMAC: u32 = 0x0000_0155;
+const TPM2_CC_HMAC_START: u32 = 0x0000_015B;
+const TPM2_CC_SEQUENCE_UPDATE: u32 = 0x0000_015C;
+const TPM2_CC_IMPORT: u32 = 0x0000_0156;
 const TPM2_CC_LOAD: u32 = 0x0000_0157;
+const TPM2_CC_LOAD_EXTERNAL: u32 = 0x0000_0167;
+const TPM2_CC_REWRAP: u32 = 0x0000_0152;
+const TPM2_CC_RSA_DECRYPT: u32 = 0x0000_0159;
+const TPM2_CC_RSA_ENCRYPT: u32 = 0x0000_0174;
+const TPM2_CC_SIGN: u32 = 0x0000_015D;
+const TPM2_CC_QUOTE: u32 = 0x0000_0158;
+const TPM2_CC_UNSEAL: u32 = 0x0000_015E;
+const TPM2_CC_ECDH_KEY_GEN: u32 = 0x0000_0163;
+const TPM2_CC_ENCRYPT_DECRYPT: u32 = 0x0000_0164;
 const TPM2_CC_NV_READ: u32 = 0x0000_014E;
 const TPM2_CC_NV_WRITE: u32 = 0x0000_0137;
 const TPM2_CC_CONTEXT_SAVE: u32 = 0x0000_0162;
 const TPM2_CC_FLUSH_CONTEXT: u32 = 0x0000_0165;
+const TPM2_CC_MAKE_CREDENTIAL: u32 = 0x0000_0168;
 const TPM2_CC_POLICY_COMMAND_CODE: u32 = 0x0000_016C;
+const TPM2_CC_POLICY_AUTH_VALUE: u32 = 0x0000_016B;
+const TPM2_CC_POLICY_AUTHORIZE: u32 = 0x0000_016A;
+const TPM2_CC_POLICY_COUNTER_TIMER: u32 = 0x0000_016D;
+const TPM2_CC_POLICY_CP_HASH: u32 = 0x0000_016E;
+const TPM2_CC_POLICY_LOCALITY: u32 = 0x0000_016F;
+const TPM2_CC_POLICY_NAME_HASH: u32 = 0x0000_0170;
+const TPM2_CC_POLICY_OR: u32 = 0x0000_0171;
+const TPM2_CC_POLICY_TICKET: u32 = 0x0000_0172;
+const TPM2_CC_POLICY_PCR: u32 = 0x0000_017F;
+const TPM2_CC_POLICY_RESTART: u32 = 0x0000_0180;
+const TPM2_CC_OBJECT_CHANGE_AUTH: u32 = 0x0000_0150;
+const TPM2_CC_POLICY_SECRET: u32 = 0x0000_0151;
 const TPM2_CC_READ_PUBLIC: u32 = 0x0000_0173;
+const TPM2_CC_VERIFY_SIGNATURE: u32 = 0x0000_0177;
+const TPM2_CC_EVENT_SEQUENCE_COMPLETE: u32 = 0x0000_0185;
+const TPM2_CC_HASH_SEQUENCE_START: u32 = 0x0000_0186;
+const TPM2_CC_POLICY_DUPLICATION_SELECT: u32 = 0x0000_0188;
 const TPM2_CC_POLICY_GET_DIGEST: u32 = 0x0000_0189;
+const TPM2_CC_POLICY_PASSWORD: u32 = 0x0000_018C;
+const TPM2_CC_COMMIT: u32 = 0x0000_018B;
+const TPM2_CC_POLICY_NV_WRITTEN: u32 = 0x0000_018F;
+const TPM2_CC_POLICY_TEMPLATE: u32 = 0x0000_0190;
+const TPM2_CC_CREATE_LOADED: u32 = 0x0000_0191;
+const TPM2_CC_POLICY_AUTHORIZE_NV: u32 = 0x0000_0192;
+const TPM2_CC_POLICY_SIGNED: u32 = 0x0000_0160;
+const TPM2_CC_ZGEN_2PHASE: u32 = 0x0000_018D;
 const TPM2_CC_CONTEXT_LOAD: u32 = 0x0000_0161;
+const TPM2_CC_ENCRYPT_DECRYPT2: u32 = 0x0000_0193;
+const TPM2_CC_START_AUTH_SESSION: u32 = 0x0000_0176;
 
 impl core::fmt::Debug for TpmChip {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -658,6 +709,78 @@ impl TpmChip {
         (cmd.len() >= TPM_HEADER_SIZE).then(|| u32::from_be_bytes([cmd[6], cmd[7], cmd[8], cmd[9]]))
     }
 
+    fn command_tag(cmd: &[u8]) -> Option<u16> {
+        (cmd.len() >= TPM_HEADER_SIZE).then(|| u16::from_be_bytes([cmd[0], cmd[1]]))
+    }
+
+    fn command_handle_count(command_code: u32) -> Option<usize> {
+        match command_code {
+            TPM2_CC_CREATE_PRIMARY => Some(1),
+            TPM2_CC_EVICT_CONTROL => Some(2),
+            TPM2_CC_SEQUENCE_COMPLETE => Some(1),
+            TPM2_CC_ACTIVATE_CREDENTIAL => Some(2),
+            TPM2_CC_CERTIFY => Some(2),
+            TPM2_CC_POLICY_NV => Some(3),
+            TPM2_CC_CREATE => Some(1),
+            TPM2_CC_CERTIFY_CREATION => Some(2),
+            TPM2_CC_DUPLICATE => Some(2),
+            TPM2_CC_GET_COMMAND_AUDIT_DIGEST => Some(2),
+            TPM2_CC_GET_TIME => Some(2),
+            TPM2_CC_GET_SESSION_AUDIT_DIGEST => Some(3),
+            TPM2_CC_NV_CERTIFY => Some(3),
+            TPM2_CC_ECDH_ZGEN => Some(1),
+            TPM2_CC_HMAC => Some(1),
+            TPM2_CC_HMAC_START => Some(1),
+            TPM2_CC_SEQUENCE_UPDATE => Some(1),
+            TPM2_CC_IMPORT => Some(1),
+            TPM2_CC_LOAD => Some(1),
+            TPM2_CC_LOAD_EXTERNAL => Some(1),
+            TPM2_CC_OBJECT_CHANGE_AUTH => Some(2),
+            TPM2_CC_POLICY_SECRET => Some(2),
+            TPM2_CC_REWRAP => Some(2),
+            TPM2_CC_RSA_DECRYPT => Some(1),
+            TPM2_CC_RSA_ENCRYPT => Some(1),
+            TPM2_CC_SIGN => Some(1),
+            TPM2_CC_QUOTE => Some(1),
+            TPM2_CC_UNSEAL => Some(1),
+            TPM2_CC_POLICY_SIGNED => Some(2),
+            TPM2_CC_ECDH_KEY_GEN => Some(1),
+            TPM2_CC_ENCRYPT_DECRYPT => Some(1),
+            TPM2_CC_NV_READ => Some(2),
+            TPM2_CC_NV_WRITE => Some(2),
+            TPM2_CC_CONTEXT_SAVE => Some(1),
+            TPM2_CC_FLUSH_CONTEXT => Some(1),
+            TPM2_CC_MAKE_CREDENTIAL => Some(1),
+            TPM2_CC_POLICY_COMMAND_CODE => Some(1),
+            TPM2_CC_POLICY_AUTH_VALUE => Some(1),
+            TPM2_CC_POLICY_AUTHORIZE => Some(1),
+            TPM2_CC_POLICY_COUNTER_TIMER => Some(1),
+            TPM2_CC_POLICY_CP_HASH => Some(1),
+            TPM2_CC_POLICY_LOCALITY => Some(1),
+            TPM2_CC_POLICY_NAME_HASH => Some(1),
+            TPM2_CC_POLICY_OR => Some(1),
+            TPM2_CC_POLICY_PCR => Some(1),
+            TPM2_CC_POLICY_TICKET => Some(1),
+            TPM2_CC_POLICY_RESTART => Some(1),
+            TPM2_CC_READ_PUBLIC => Some(1),
+            TPM2_CC_EVENT_SEQUENCE_COMPLETE => Some(1),
+            TPM2_CC_HASH_SEQUENCE_START => Some(0),
+            TPM2_CC_POLICY_DUPLICATION_SELECT => Some(1),
+            TPM2_CC_POLICY_GET_DIGEST => Some(1),
+            TPM2_CC_POLICY_PASSWORD => Some(1),
+            TPM2_CC_COMMIT => Some(1),
+            TPM2_CC_POLICY_NV_WRITTEN => Some(1),
+            TPM2_CC_ZGEN_2PHASE => Some(1),
+            TPM2_CC_POLICY_TEMPLATE => Some(1),
+            TPM2_CC_CREATE_LOADED => Some(1),
+            TPM2_CC_POLICY_AUTHORIZE_NV => Some(3),
+            TPM2_CC_CONTEXT_LOAD => Some(0),
+            TPM2_CC_VERIFY_SIGNATURE => Some(1),
+            TPM2_CC_ENCRYPT_DECRYPT2 => Some(1),
+            _ => None,
+        }
+    }
+
     fn command_handle(cmd: &[u8], handle_index: usize) -> Option<u32> {
         let offset = TPM_HEADER_SIZE.checked_add(handle_index.checked_mul(4)?)?;
         (cmd.len() >= offset + 4).then(|| {
@@ -675,28 +798,190 @@ impl TpmChip {
         cmd[offset..offset + 4].copy_from_slice(&remapped_handle.to_be_bytes());
     }
 
+    fn rewrite_auth_area_session_handles(cmd: &mut [u8], space: &TpmSpace) -> Result<(), TpmError> {
+        if Self::command_tag(cmd) != Some(tag::TPM_ST_SESSIONS) {
+            return Ok(());
+        }
+
+        let Some(command_code) = Self::command_code(cmd) else {
+            return Ok(());
+        };
+        let Some(handle_count) = Self::command_handle_count(command_code) else {
+            return Ok(());
+        };
+
+        let handles_len = handle_count
+            .checked_mul(4)
+            .ok_or(TpmError::Buffer(BufferError::Overflow))?;
+        let auth_size_offset = TPM_HEADER_SIZE
+            .checked_add(handles_len)
+            .ok_or(TpmError::Buffer(BufferError::Overflow))?;
+        let auth_size = read_u32_be(cmd, auth_size_offset)? as usize;
+        let auth_start = auth_size_offset
+            .checked_add(4)
+            .ok_or(TpmError::Buffer(BufferError::Overflow))?;
+        let auth_end = auth_start
+            .checked_add(auth_size)
+            .ok_or(TpmError::Buffer(BufferError::Overflow))?;
+        if auth_end > cmd.len() {
+            return Err(TpmError::Buffer(BufferError::TooShort));
+        }
+
+        let mut offset = auth_start;
+        while offset < auth_end {
+            let session_handle = read_u32_be(cmd, offset)?;
+            if Self::is_tracked_session(space, session_handle) {
+                if let Some(real_handle) = space.session_real_handle(session_handle) {
+                    if real_handle != session_handle {
+                        cmd[offset..offset + 4].copy_from_slice(&real_handle.to_be_bytes());
+                    }
+                }
+            }
+            offset = offset
+                .checked_add(4)
+                .ok_or(TpmError::Buffer(BufferError::Overflow))?;
+
+            let nonce_size = read_u16_be(cmd, offset)? as usize;
+            offset = offset
+                .checked_add(2 + nonce_size)
+                .ok_or(TpmError::Buffer(BufferError::Overflow))?;
+
+            let _session_attributes = *cmd
+                .get(offset)
+                .ok_or(TpmError::Buffer(BufferError::TooShort))?;
+            offset = offset
+                .checked_add(1)
+                .ok_or(TpmError::Buffer(BufferError::Overflow))?;
+
+            let hmac_size = read_u16_be(cmd, offset)? as usize;
+            offset = offset
+                .checked_add(2 + hmac_size)
+                .ok_or(TpmError::Buffer(BufferError::Overflow))?;
+        }
+
+        if offset != auth_end {
+            return Err(TpmError::Buffer(BufferError::SizeMismatch {
+                expected: auth_end,
+                actual: offset,
+            }));
+        }
+
+        Ok(())
+    }
+
     fn context_load_saved_handle(cmd: &[u8]) -> Option<u32> {
         (cmd.len() >= TPM_HEADER_SIZE + 12)
             .then(|| u32::from_be_bytes([cmd[18], cmd[19], cmd[20], cmd[21]]))
     }
 
-    fn command_handle_indexes(command_code: u32) -> &'static [usize] {
-        match command_code {
-            TPM2_CC_CREATE
-            | TPM2_CC_HMAC
-            | TPM2_CC_LOAD
-            | TPM2_CC_CONTEXT_SAVE
-            | TPM2_CC_FLUSH_CONTEXT
-            | TPM2_CC_POLICY_COMMAND_CODE
-            | TPM2_CC_READ_PUBLIC
-            | TPM2_CC_POLICY_GET_DIGEST => &[0],
-            TPM2_CC_EVICT_CONTROL | TPM2_CC_NV_READ | TPM2_CC_NV_WRITE => &[1],
-            _ => &[],
+    fn is_tracked_object(space: &TpmSpace, logical_handle: u32) -> bool {
+        space.object_entry(logical_handle).is_some()
+    }
+
+    fn is_tracked_session(space: &TpmSpace, logical_handle: u32) -> bool {
+        space.session_entry(logical_handle).is_some()
+    }
+
+    fn tracked_resource_type(space: &TpmSpace, logical_handle: u32) -> Option<TpmResourceType> {
+        if space.object_entry(logical_handle).is_some() {
+            Some(TpmResourceType::Key)
+        } else if space.session_entry(logical_handle).is_some() {
+            TpmResourceType::from_handle(logical_handle).and_then(|resource_type| {
+                matches!(
+                    resource_type,
+                    TpmResourceType::HmacSession | TpmResourceType::PolicySession
+                )
+                .then_some(resource_type)
+            })
+        } else {
+            None
         }
     }
 
-    fn is_tracked_object(space: &TpmSpace, logical_handle: u32) -> bool {
-        space.object_handles().contains(&logical_handle)
+    fn tracked_context_blob(space: &TpmSpace, logical_handle: u32) -> Option<Vec<u8>> {
+        if space.object_entry(logical_handle).is_some() {
+            space.object_context_blob(logical_handle)
+        } else if space.session_entry(logical_handle).is_some() {
+            space.session_context_blob(logical_handle)
+        } else {
+            None
+        }
+    }
+
+    fn tracked_handle_needs_context_load(space: &TpmSpace, logical_handle: u32) -> bool {
+        if space.object_entry(logical_handle).is_some() {
+            space.object_needs_context_load(logical_handle)
+        } else {
+            space.session_needs_context_load(logical_handle)
+        }
+    }
+
+    fn prepare_sessions(&self, space: &TpmSpace) -> Result<BTreeMap<u32, u32>, TpmError> {
+        let mut loaded_sessions = BTreeMap::new();
+
+        for logical_handle in space.session_handles() {
+            if !space.session_needs_context_load(logical_handle) {
+                continue;
+            }
+
+            let Some(context_blob) = space.session_context_blob(logical_handle) else {
+                continue;
+            };
+
+            let real_handle = self.context_load(&context_blob)?;
+            Self::validate_restored_session_handle(logical_handle, real_handle).inspect_err(
+                |_| {
+                    if let Err(err) = self.flush_context(real_handle) {
+                        warn!(
+                            "TPM: failed to flush mismatched restored session 0x{:08x} for logical handle 0x{:08x} in space {}: {:?}",
+                            real_handle,
+                            logical_handle,
+                            space.id(),
+                            err
+                        );
+                    }
+                },
+            )?;
+            space.mark_session_loaded_with_real(logical_handle, real_handle);
+            loaded_sessions.insert(logical_handle, real_handle);
+        }
+
+        Ok(loaded_sessions)
+    }
+
+    fn validate_restored_session_handle(
+        logical_handle: u32,
+        restored_handle: u32,
+    ) -> Result<(), TpmError> {
+        if restored_handle == logical_handle {
+            Ok(())
+        } else {
+            Err(TpmError::Transport(TransportError::Generic(
+                "session restored to a different handle",
+            )))
+        }
+    }
+
+    fn store_tracked_context_blob(space: &TpmSpace, logical_handle: u32, context_blob: Vec<u8>) {
+        if space.object_entry(logical_handle).is_some() {
+            space.store_object_context_blob(logical_handle, context_blob);
+        } else if space.session_entry(logical_handle).is_some() {
+            space.store_session_context_blob(logical_handle, context_blob);
+        } else {
+            space
+                .resource_manager()
+                .store_context_blob(logical_handle, context_blob);
+        }
+    }
+
+    fn remove_tracked_context_blob(space: &TpmSpace, logical_handle: u32) -> Option<Vec<u8>> {
+        if Self::is_tracked_object(space, logical_handle) {
+            space.remove_object_context_blob(logical_handle)
+        } else if Self::is_tracked_session(space, logical_handle) {
+            space.remove_session_context_blob(logical_handle)
+        } else {
+            space.resource_manager().remove_context_blob(logical_handle)
+        }
     }
 
     fn store_and_maybe_flush_context(
@@ -707,12 +992,16 @@ impl TpmChip {
         resource_type: TpmResourceType,
         context_blob: Vec<u8>,
     ) -> Result<(), TpmError> {
-        space
-            .resource_manager()
-            .store_context_blob(logical_handle, context_blob);
+        Self::store_tracked_context_blob(space, logical_handle, context_blob);
 
         if matches!(resource_type, TpmResourceType::Key) {
+            space.mark_object_saved(logical_handle);
             self.flush_context(real_handle)?;
+        } else if matches!(
+            resource_type,
+            TpmResourceType::HmacSession | TpmResourceType::PolicySession
+        ) {
+            space.mark_session_saved(logical_handle);
         }
 
         Ok(())
@@ -726,28 +1015,67 @@ impl TpmChip {
         let Some(command_code) = Self::command_code(cmd) else {
             return Ok(BTreeMap::new());
         };
+        let mut loaded_handles = self.prepare_sessions(space)?;
+        let Some(handle_count) = Self::command_handle_count(command_code) else {
+            Self::rewrite_auth_area_session_handles(cmd, space)?;
+            return Ok(loaded_handles);
+        };
 
-        let handle_indexes = Self::command_handle_indexes(command_code);
-        if handle_indexes.is_empty() {
-            return Ok(BTreeMap::new());
-        }
-
-        let mut loaded_handles = BTreeMap::new();
-        for &handle_index in handle_indexes {
+        for handle_index in 0..handle_count {
             let Some(logical_handle) = Self::command_handle(cmd, handle_index) else {
                 continue;
             };
 
-            if !Self::is_tracked_object(space, logical_handle) {
+            let tracked_resource_type = Self::tracked_resource_type(space, logical_handle);
+            if tracked_resource_type.is_none() {
                 continue;
             }
 
-            if let Some(context_blob) = space.resource_manager().get_context_blob(logical_handle) {
-                let real_handle = self.context_load(&context_blob)?;
-                Self::rewrite_handle(cmd, handle_index, real_handle);
-                loaded_handles.insert(logical_handle, real_handle);
+            if !Self::tracked_handle_needs_context_load(space, logical_handle) {
+                if Self::is_tracked_object(space, logical_handle) {
+                    if let Some(real_handle) = space.object_real_handle(logical_handle) {
+                        if real_handle != logical_handle {
+                            Self::rewrite_handle(cmd, handle_index, real_handle);
+                        }
+                    }
+                } else if Self::is_tracked_session(space, logical_handle) {
+                    if let Some(real_handle) = space.session_real_handle(logical_handle) {
+                        if real_handle != logical_handle {
+                            Self::rewrite_handle(cmd, handle_index, real_handle);
+                        }
+                    }
+                }
+                continue;
             }
+
+            let Some(context_blob) = Self::tracked_context_blob(space, logical_handle) else {
+                continue;
+            };
+
+            let real_handle = self.context_load(&context_blob)?;
+            if matches!(tracked_resource_type, Some(TpmResourceType::Key)) {
+                space.mark_object_loaded_with_real(logical_handle, real_handle);
+            } else {
+                Self::validate_restored_session_handle(logical_handle, real_handle).inspect_err(
+                    |_| {
+                        if let Err(err) = self.flush_context(real_handle) {
+                            warn!(
+                                "TPM: failed to flush mismatched restored session 0x{:08x} for logical handle 0x{:08x} in space {}: {:?}",
+                                real_handle,
+                                logical_handle,
+                                space.id(),
+                                err
+                            );
+                        }
+                    },
+                )?;
+                space.mark_session_loaded_with_real(logical_handle, real_handle);
+            }
+            Self::rewrite_handle(cmd, handle_index, real_handle);
+            loaded_handles.insert(logical_handle, real_handle);
         }
+
+        Self::rewrite_auth_area_session_handles(cmd, space)?;
 
         Ok(loaded_handles)
     }
@@ -758,8 +1086,17 @@ impl TpmChip {
         loaded_handles: &BTreeMap<u32, u32>,
     ) -> Result<(), TpmError> {
         for (&logical_handle, &real_handle) in loaded_handles {
+            let was_loaded = if Self::is_tracked_object(space, logical_handle) {
+                space.object_is_loaded(logical_handle)
+            } else if Self::is_tracked_session(space, logical_handle) {
+                space.session_is_loaded(logical_handle)
+            } else {
+                false
+            };
             let context_blob = self.context_save(real_handle)?;
-            let resource_type = TpmResourceType::Key;
+            let Some(resource_type) = Self::tracked_resource_type(space, logical_handle) else {
+                continue;
+            };
             self.store_and_maybe_flush_context(
                 space,
                 logical_handle,
@@ -767,6 +1104,14 @@ impl TpmChip {
                 resource_type,
                 context_blob,
             )?;
+
+            debug!(
+                "TPM: committed prepared {:?} handle 0x{:08x} in space {} (was_loaded={})",
+                resource_type,
+                logical_handle,
+                space.id(),
+                was_loaded
+            );
         }
 
         Ok(())
@@ -782,11 +1127,11 @@ impl TpmChip {
         let Some(logical_handle) = Self::command_handle(original_cmd, 0) else {
             return Ok(());
         };
+        let was_object_loaded = Self::is_tracked_object(space, logical_handle)
+            && space.object_is_loaded(logical_handle);
 
         let context_blob = parse_context_save_response(response)?;
-        space
-            .resource_manager()
-            .store_context_blob(logical_handle, context_blob);
+        Self::store_tracked_context_blob(space, logical_handle, context_blob);
         debug!(
             "TPM: stored explicit context-save blob for handle 0x{:08x} in space {}",
             logical_handle,
@@ -797,29 +1142,81 @@ impl TpmChip {
             let real_handle = translated_handles
                 .get(&logical_handle)
                 .copied()
+                .or_else(|| space.object_real_handle(logical_handle))
                 .unwrap_or(logical_handle);
-            self.flush_context(real_handle)?;
+            if was_object_loaded || real_handle != logical_handle {
+                self.flush_context(real_handle)?;
+            }
         } else if matches!(
             TpmResourceType::from_handle(logical_handle),
             Some(TpmResourceType::HmacSession | TpmResourceType::PolicySession)
         ) {
-            space.untrack_session(logical_handle);
+            if Self::is_tracked_session(space, logical_handle) {
+                space.finish_explicit_session_context_save(logical_handle);
+            }
         }
 
         Ok(())
     }
 
-    fn commit_flush_context(&self, space: &TpmSpace, original_cmd: &[u8]) {
-        if let Some(logical_handle) = Self::command_handle(original_cmd, 0) {
-            space.resource_manager().remove_context_blob(logical_handle);
+    fn commit_flush_context(&self, space: &TpmSpace, original_cmd: &[u8], response: &[u8]) {
+        let Ok(header) = TpmResponseHeader::from_bytes(response) else {
+            return;
+        };
+        if !header.is_success() {
+            return;
         }
+
+        if let Some(logical_handle) = Self::command_handle(original_cmd, 0) {
+            Self::remove_tracked_context_blob(space, logical_handle);
+            if Self::is_tracked_object(space, logical_handle) {
+                space.untrack_object(logical_handle);
+            } else if Self::is_tracked_session(space, logical_handle) {
+                space.untrack_session(logical_handle);
+            }
+        }
+    }
+
+    fn save_loaded_space_resources(&self, space: &TpmSpace) -> Result<(), TpmError> {
+        for logical_handle in space.loaded_object_handles() {
+            let Some(real_handle) = space.object_real_handle(logical_handle) else {
+                continue;
+            };
+            let context_blob = self.context_save(real_handle)?;
+            self.store_and_maybe_flush_context(
+                space,
+                logical_handle,
+                real_handle,
+                TpmResourceType::Key,
+                context_blob,
+            )?;
+        }
+
+        for logical_handle in space.loaded_session_handles() {
+            let Some(real_handle) = space.session_real_handle(logical_handle) else {
+                continue;
+            };
+            let Some(resource_type) = Self::tracked_resource_type(space, logical_handle) else {
+                continue;
+            };
+            let context_blob = self.context_save(real_handle)?;
+            self.store_and_maybe_flush_context(
+                space,
+                logical_handle,
+                real_handle,
+                resource_type,
+                context_blob,
+            )?;
+        }
+
+        Ok(())
     }
 
     fn commit_context_load(
         &self,
         space: &TpmSpace,
         original_cmd: &[u8],
-        response: &[u8],
+        response: &mut [u8],
     ) -> Result<(), TpmError> {
         let Some(saved_handle) = Self::context_load_saved_handle(original_cmd) else {
             return Ok(());
@@ -834,24 +1231,54 @@ impl TpmChip {
 
         match resource_type {
             TpmResourceType::Key => {
-                // Keep explicitly loaded objects alive for the lifetime of the
-                // current file descriptor so follow-up commands on the same
-                // ESYS context can use the returned transient handle directly.
-                // Consume the old saved blob to avoid a second implicit
-                // `ContextLoad` on the same fd.
-                space.resource_manager().remove_context_blob(saved_handle);
-                space.untrack_object(saved_handle);
-                space.track_object(loaded_handle);
-                space.mark_externally_loaded_object(loaded_handle);
+                let incoming_context_blob = original_cmd
+                    .get(TPM_HEADER_SIZE..)
+                    .ok_or(TpmError::Buffer(BufferError::TooShort))?;
+                let reuse_saved_handle = space
+                    .object_context_blob(saved_handle)
+                    .as_deref()
+                    .is_some_and(|stored_blob| stored_blob == incoming_context_blob);
+                let Some(logical_handle) = space.finish_explicit_object_context_load(
+                    saved_handle,
+                    loaded_handle,
+                    true,
+                    reuse_saved_handle,
+                ) else {
+                    if let Err(err) = self.flush_context(loaded_handle) {
+                        warn!(
+                            "TPM: failed to flush explicitly loaded object 0x{:08x} after vhandle exhaustion in space {}: {:?}",
+                            loaded_handle,
+                            space.id(),
+                            err
+                        );
+                    }
+                    return Err(TpmError::Transport(TransportError::Generic(
+                        "out of transient object vhandle slots",
+                    )));
+                };
+                response[10..14].copy_from_slice(&logical_handle.to_be_bytes());
             }
             TpmResourceType::HmacSession | TpmResourceType::PolicySession => {
+                if let Err(err) =
+                    Self::validate_restored_session_handle(saved_handle, loaded_handle)
+                {
+                    if let Err(err) = self.flush_context(loaded_handle) {
+                        warn!(
+                            "TPM: failed to flush mismatched explicit session restore 0x{:08x} for logical handle 0x{:08x} in space {}: {:?}",
+                            loaded_handle,
+                            saved_handle,
+                            space.id(),
+                            err
+                        );
+                    }
+                    return Err(err);
+                }
                 // Sessions must stay loaded after an explicit `ContextLoad`;
                 // otherwise auth commands immediately fail with
                 // "session not loaded". Consume any old saved blob to avoid a
                 // second implicit `ContextLoad` on the same file descriptor.
-                space.resource_manager().remove_context_blob(saved_handle);
-                space.untrack_session(saved_handle);
-                space.track_session(loaded_handle);
+                space.finish_explicit_session_context_load(saved_handle, loaded_handle);
+                response[10..14].copy_from_slice(&saved_handle.to_be_bytes());
             }
             _ => {}
         }
@@ -859,10 +1286,141 @@ impl TpmChip {
         Ok(())
     }
 
+    fn commit_returned_handle(
+        &self,
+        space: &TpmSpace,
+        command_code: u32,
+        response: &mut [u8],
+    ) -> Result<(), TpmError> {
+        let should_track = matches!(
+            command_code,
+            TPM2_CC_START_AUTH_SESSION
+                | TPM2_CC_CREATE_PRIMARY
+                | TPM2_CC_CREATE_LOADED
+                | TPM2_CC_HMAC_START
+                | TPM2_CC_HASH_SEQUENCE_START
+                | TPM2_CC_LOAD
+                | TPM2_CC_LOAD_EXTERNAL
+        );
+        if !should_track || response.len() < 14 {
+            return Ok(());
+        }
+
+        let Ok(header) = TpmResponseHeader::from_bytes(response) else {
+            return Ok(());
+        };
+        if !header.is_success() {
+            return Ok(());
+        }
+
+        let handle = u32::from_be_bytes([response[10], response[11], response[12], response[13]]);
+        if handle == 0 {
+            return Ok(());
+        }
+
+        match TpmResourceType::from_handle(handle) {
+            Some(TpmResourceType::Key) => {
+                if let Some(logical_handle) = space.insert_loaded_object_with_real(handle) {
+                    response[10..14].copy_from_slice(&logical_handle.to_be_bytes());
+                } else if let Err(err) = self.flush_context(handle) {
+                    warn!(
+                        "TPM: no free transient vhandle slots for object 0x{:08x} in space {}; flush failed: {:?}",
+                        handle,
+                        space.id(),
+                        err
+                    );
+                    return Err(TpmError::Transport(TransportError::Generic(
+                        "out of transient object vhandle slots",
+                    )));
+                } else {
+                    return Err(TpmError::Transport(TransportError::Generic(
+                        "out of transient object vhandle slots",
+                    )));
+                }
+            }
+            Some(TpmResourceType::HmacSession | TpmResourceType::PolicySession) => {
+                space.insert_loaded_session(handle)
+            }
+            _ => {}
+        }
+
+        Ok(())
+    }
+
+    fn commit_get_capability(
+        &self,
+        space: &TpmSpace,
+        original_cmd: &[u8],
+        response: &mut Vec<u8>,
+    ) -> Result<(), TpmError> {
+        let requested_capability = read_u32_be(original_cmd, TPM_HEADER_SIZE)?;
+        if requested_capability != capability::TPM_CAP_HANDLES {
+            return Ok(());
+        }
+
+        let header = TpmResponseHeader::from_bytes(response)?;
+        if !header.is_success() {
+            return Ok(());
+        }
+
+        let returned_capability = read_u32_be(response, TPM_HEADER_SIZE + 1)?;
+        if returned_capability != capability::TPM_CAP_HANDLES {
+            return Ok(());
+        }
+
+        let count = read_u32_be(response, TPM_HEADER_SIZE + 5)? as usize;
+        let mut read_offset = TPM_HEADER_SIZE + 9;
+        let mut write_offset = TPM_HEADER_SIZE + 9;
+        let mut mapped_count = 0usize;
+        for _ in 0..count {
+            let real_handle = read_u32_be(response, read_offset)?;
+            let mapped_handle = if matches!(
+                TpmResourceType::from_handle(real_handle),
+                Some(TpmResourceType::Key)
+            ) {
+                space.logical_object_handle_for_real(real_handle)
+            } else if matches!(
+                TpmResourceType::from_handle(real_handle),
+                Some(TpmResourceType::HmacSession | TpmResourceType::PolicySession)
+            ) {
+                space.logical_session_handle_for_real(real_handle)
+            } else {
+                Some(real_handle)
+            };
+
+            if let Some(logical_handle) = mapped_handle {
+                response[write_offset..write_offset + 4]
+                    .copy_from_slice(&logical_handle.to_be_bytes());
+                write_offset = write_offset
+                    .checked_add(4)
+                    .ok_or(TpmError::Buffer(BufferError::Overflow))?;
+                mapped_count = mapped_count
+                    .checked_add(1)
+                    .ok_or(TpmError::Buffer(BufferError::Overflow))?;
+            }
+            read_offset = read_offset
+                .checked_add(4)
+                .ok_or(TpmError::Buffer(BufferError::Overflow))?;
+        }
+
+        response[TPM_HEADER_SIZE + 5..TPM_HEADER_SIZE + 9]
+            .copy_from_slice(&(mapped_count as u32).to_be_bytes());
+        response[2..6].copy_from_slice(&(write_offset as u32).to_be_bytes());
+        response.truncate(write_offset);
+
+        Ok(())
+    }
+
     pub fn close_space(&self, space: &TpmSpace) {
-        for logical_handle in space.object_handles() {
-            if space.is_externally_loaded_object(logical_handle) {
-                if let Err(err) = self.flush_context(logical_handle) {
+        for logical_handle in space.loaded_object_handles() {
+            let real_handle = space
+                .object_real_handle(logical_handle)
+                .unwrap_or(logical_handle);
+            if space
+                .object_entry(logical_handle)
+                .is_some_and(|entry| entry.externally_loaded)
+            {
+                if let Err(err) = self.flush_context(real_handle) {
                     warn!(
                         "TPM: failed to flush externally loaded object 0x{:08x} while closing space {}: {:?}",
                         logical_handle,
@@ -873,20 +1431,10 @@ impl TpmChip {
                 continue;
             }
 
-            if space
-                .resource_manager()
-                .get_context_blob(logical_handle)
-                .is_some()
-            {
-                continue;
-            }
-
-            match self.context_save(logical_handle) {
+            match self.context_save(real_handle) {
                 Ok(context_blob) => {
-                    space
-                        .resource_manager()
-                        .store_context_blob(logical_handle, context_blob);
-                    if let Err(err) = self.flush_context(logical_handle) {
+                    space.store_object_context_blob(logical_handle, context_blob);
+                    if let Err(err) = self.flush_context(real_handle) {
                         warn!(
                             "TPM: failed to flush object 0x{:08x} while closing space {}: {:?}",
                             logical_handle,
@@ -906,8 +1454,11 @@ impl TpmChip {
             }
         }
 
-        for logical_handle in space.session_handles() {
-            if let Err(err) = self.flush_context(logical_handle) {
+        for logical_handle in space.loaded_session_handles() {
+            let real_handle = space
+                .session_real_handle(logical_handle)
+                .unwrap_or(logical_handle);
+            if let Err(err) = self.flush_context(real_handle) {
                 warn!(
                     "TPM: failed to flush session 0x{:08x} while closing space {}: {:?}",
                     logical_handle,
@@ -949,7 +1500,7 @@ impl TpmChip {
                 );
                 err
             })?;
-        let response = match self.execute_command(&translated_cmd) {
+        let mut response = match self.execute_command(&translated_cmd) {
             Ok(response) => response,
             Err(err) => {
                 error!(
@@ -969,26 +1520,48 @@ impl TpmChip {
                 return Err(err);
             }
         };
-
         let commit_result = match command_code {
+            TPM2_CC_GET_CAPABILITY => self.commit_get_capability(space, cmd, &mut response),
             TPM2_CC_CONTEXT_SAVE => {
                 self.commit_context_save(space, cmd, &translated_handles, &response)
             }
-            TPM2_CC_CONTEXT_LOAD => self.commit_context_load(space, cmd, &response),
+            TPM2_CC_CONTEXT_LOAD => self.commit_context_load(space, cmd, &mut response),
             TPM2_CC_FLUSH_CONTEXT => {
-                self.commit_flush_context(space, cmd);
+                self.commit_flush_context(space, cmd, &response);
                 Ok(())
             }
             _ => self.commit_prepared_handles(space, &translated_handles),
         };
 
         if let Err(err) = commit_result {
-            warn!(
+            error!(
                 "TPM: failed to commit space {} after command 0x{:08x}: {:?}",
                 space.id(),
                 command_code,
                 err
             );
+            return Err(err);
+        }
+
+        self.commit_returned_handle(space, command_code, &mut response)
+            .map_err(|err| {
+                error!(
+                    "TPM: failed to map returned handles for command 0x{:08x} in space {}: {:?}",
+                    command_code,
+                    space.id(),
+                    err
+                );
+                err
+            })?;
+
+        if let Err(err) = self.save_loaded_space_resources(space) {
+            error!(
+                "TPM: failed to save loaded resources in space {} after command 0x{:08x}: {:?}",
+                space.id(),
+                command_code,
+                err
+            );
+            return Err(err);
         }
 
         Ok(response)
@@ -998,5 +1571,179 @@ impl TpmChip {
 impl Drop for TpmChip {
     fn drop(&mut self) {
         self.cleanup_resources();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec;
+
+    use super::*;
+    use crate::protocol::header::{write_u16_be, write_u32_be};
+
+    struct DummyTransport;
+
+    impl TpmTransport for DummyTransport {
+        fn send(&self, _cmd: &[u8]) -> Result<(), TpmError> {
+            unreachable!("dummy transport is not used by these unit tests")
+        }
+
+        fn recv(&self) -> Result<Vec<u8>, TpmError> {
+            unreachable!("dummy transport is not used by these unit tests")
+        }
+    }
+
+    fn build_sessions_command_with_one_auth(
+        command_code: u32,
+        command_handles: &[u32],
+        auth_session_handle: u32,
+    ) -> Vec<u8> {
+        let mut params = Vec::new();
+        for handle in command_handles {
+            write_u32_be(&mut params, *handle);
+        }
+
+        let mut auth_area = Vec::new();
+        write_u32_be(&mut auth_area, auth_session_handle);
+        write_u16_be(&mut auth_area, 0);
+        auth_area.push(0);
+        write_u16_be(&mut auth_area, 0);
+
+        write_u32_be(&mut params, auth_area.len() as u32);
+        params.extend_from_slice(&auth_area);
+
+        let header = TpmCommandHeader::new(
+            tag::TPM_ST_SESSIONS,
+            (TPM_HEADER_SIZE + params.len()) as u32,
+            command_code,
+        );
+        let mut cmd = header.to_bytes();
+        cmd.extend_from_slice(&params);
+        cmd
+    }
+
+    #[test]
+    fn rewrite_auth_area_session_handles_rewrites_tracked_session() {
+        let space = TpmSpace::new(1);
+        let logical_handle = 0x0300_0001;
+        let real_handle = 0x0300_0011;
+        space.track_session(logical_handle);
+        space.finish_explicit_session_context_load(logical_handle, real_handle);
+
+        let mut cmd = build_sessions_command_with_one_auth(
+            TPM2_CC_CREATE_PRIMARY,
+            &[0x4000_0001],
+            logical_handle,
+        );
+
+        TpmChip::rewrite_auth_area_session_handles(&mut cmd, &space).unwrap();
+
+        let session_offset = TPM_HEADER_SIZE + 4 + 4;
+        let rewritten = u32::from_be_bytes([
+            cmd[session_offset],
+            cmd[session_offset + 1],
+            cmd[session_offset + 2],
+            cmd[session_offset + 3],
+        ]);
+        assert_eq!(rewritten, real_handle);
+    }
+
+    #[test]
+    fn rewrite_auth_area_session_handles_leaves_pw_session_unchanged() {
+        let space = TpmSpace::new(1);
+        let mut cmd = build_sessions_command_with_one_auth(
+            TPM2_CC_CREATE_PRIMARY,
+            &[0x4000_0001],
+            session::TPM_RS_PW,
+        );
+
+        TpmChip::rewrite_auth_area_session_handles(&mut cmd, &space).unwrap();
+
+        let session_offset = TPM_HEADER_SIZE + 4 + 4;
+        let rewritten = u32::from_be_bytes([
+            cmd[session_offset],
+            cmd[session_offset + 1],
+            cmd[session_offset + 2],
+            cmd[session_offset + 3],
+        ]);
+        assert_eq!(rewritten, session::TPM_RS_PW);
+    }
+
+    #[test]
+    fn validate_restored_session_handle_accepts_same_handle() {
+        assert!(TpmChip::validate_restored_session_handle(0x0300_0001, 0x0300_0001).is_ok());
+    }
+
+    #[test]
+    fn validate_restored_session_handle_rejects_different_handle() {
+        let err = TpmChip::validate_restored_session_handle(0x0300_0001, 0x0300_0011)
+            .expect_err("different restored session handle must be rejected");
+        assert!(matches!(
+            err,
+            TpmError::Transport(TransportError::Generic(
+                "session restored to a different handle"
+            ))
+        ));
+    }
+
+    #[test]
+    fn object_change_auth_maps_both_object_handles() {
+        assert_eq!(
+            TpmChip::command_handle_count(TPM2_CC_OBJECT_CHANGE_AUTH),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn linux_style_mixed_handle_commands_have_expected_counts() {
+        assert_eq!(TpmChip::command_handle_count(TPM2_CC_REWRAP), Some(2));
+        assert_eq!(TpmChip::command_handle_count(TPM2_CC_NV_CERTIFY), Some(3));
+        assert_eq!(
+            TpmChip::command_handle_count(TPM2_CC_GET_COMMAND_AUDIT_DIGEST),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn get_capability_remaps_visible_object_and_session_handles() {
+        let chip = TpmChip::new(DummyTransport);
+        let space = TpmSpace::new(1);
+
+        let real_object_handle = 0x8000_0001;
+        let logical_object_handle = space
+            .insert_loaded_object_with_real(real_object_handle)
+            .expect("transient vhandle slot should be available");
+        let logical_session_handle = 0x0200_0001;
+        space.track_session(logical_session_handle);
+        space.mark_session_loaded_with_real(logical_session_handle, logical_session_handle);
+
+        let original_cmd =
+            build_get_capability_command(capability::TPM_CAP_HANDLES, handle::TRANSIENT_FIRST, 8);
+
+        let mut response = Vec::new();
+        response.extend_from_slice(&tag::TPM_ST_NO_SESSIONS.to_be_bytes());
+        response.extend_from_slice(&0u32.to_be_bytes());
+        response.extend_from_slice(&rc::TPM_RC_SUCCESS.to_be_bytes());
+        response.push(0);
+        response.extend_from_slice(&capability::TPM_CAP_HANDLES.to_be_bytes());
+        response.extend_from_slice(&3u32.to_be_bytes());
+        response.extend_from_slice(&real_object_handle.to_be_bytes());
+        response.extend_from_slice(&logical_session_handle.to_be_bytes());
+        response.extend_from_slice(&0x0200_0002u32.to_be_bytes());
+        let response_size = response.len() as u32;
+        response[2..6].copy_from_slice(&response_size.to_be_bytes());
+
+        chip.commit_get_capability(&space, &original_cmd, &mut response)
+            .expect("capability remap should succeed");
+
+        assert_eq!(read_u32_be(&response, TPM_HEADER_SIZE + 5).unwrap(), 2);
+        assert_eq!(
+            read_u32_be(&response, TPM_HEADER_SIZE + 9).unwrap(),
+            logical_object_handle
+        );
+        assert_eq!(
+            read_u32_be(&response, TPM_HEADER_SIZE + 13).unwrap(),
+            logical_session_handle
+        );
     }
 }

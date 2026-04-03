@@ -6,9 +6,8 @@
 //! This module implements HMAC authorization based on Linux tpm2-sessions.c.
 
 use alloc::{collections::BTreeMap, vec, vec::Vec};
-use core::sync::atomic::{AtomicU32, Ordering};
 
-use log::{debug, info, warn};
+use log::{debug, info};
 
 use crate::{
     resource::{TpmResourceHandle, TpmResourceType},

@@ -20,9 +20,6 @@ pub type TpmResourceHandle = u32;
 /// First valid resource handle value.
 const FIRST_HANDLE: TpmResourceHandle = 0x80000000;
 
-/// First virtual handle value for tpmrm-style isolation.
-const FIRST_VIRTUAL_HANDLE: TpmResourceHandle = 0x00000001;
-
 /// Monotonic counter for LRU timestamp tracking (no_std safe).
 static TIMESTAMP_COUNTER: AtomicU64 = AtomicU64::new(1);
 
@@ -53,8 +50,6 @@ pub struct HandleVirtualizer {
     virtual_to_real: Mutex<BTreeMap<TpmResourceHandle, HandleMapping>>,
     /// Map from real handle to virtual handle.
     real_to_virtual: Mutex<BTreeMap<TpmResourceHandle, TpmResourceHandle>>,
-    /// Next virtual handle to allocate.
-    next_virtual: Mutex<TpmResourceHandle>,
 }
 
 impl core::fmt::Debug for HandleVirtualizer {
@@ -69,7 +64,24 @@ impl HandleVirtualizer {
         Self {
             virtual_to_real: Mutex::new(BTreeMap::new()),
             real_to_virtual: Mutex::new(BTreeMap::new()),
-            next_virtual: Mutex::new(FIRST_VIRTUAL_HANDLE),
+        }
+    }
+
+    fn allocate_virtual_in_range(
+        mappings: &BTreeMap<TpmResourceHandle, HandleMapping>,
+        resource_type: TpmResourceType,
+    ) -> Option<TpmResourceHandle> {
+        let mut candidate = resource_type.handle_range_end();
+        loop {
+            if !mappings.contains_key(&candidate) {
+                return Some(candidate);
+            }
+
+            if candidate == resource_type.handle_range_start() {
+                return None;
+            }
+
+            candidate = candidate.checked_sub(1)?;
         }
     }
 
@@ -80,10 +92,15 @@ impl HandleVirtualizer {
         &self,
         real_handle: TpmResourceHandle,
         resource_type: TpmResourceType,
-    ) -> TpmResourceHandle {
-        let mut next = self.next_virtual.lock();
-        let virtual_handle = *next;
-        *next = next.wrapping_add(1);
+    ) -> Option<TpmResourceHandle> {
+        if let Some(existing) = self.real_to_virtual.lock().get(&real_handle).copied() {
+            return Some(existing);
+        }
+
+        let virtual_handle = {
+            let mappings = self.virtual_to_real.lock();
+            Self::allocate_virtual_in_range(&mappings, resource_type)?
+        };
 
         let mapping = HandleMapping {
             virtual_handle,
@@ -101,7 +118,30 @@ impl HandleVirtualizer {
             real_handle, virtual_handle
         );
 
-        virtual_handle
+        Some(virtual_handle)
+    }
+
+    /// Inserts or updates a virtual-to-real mapping.
+    pub fn set_virtual(
+        &self,
+        virtual_handle: TpmResourceHandle,
+        real_handle: TpmResourceHandle,
+        resource_type: TpmResourceType,
+    ) {
+        let mut virtual_to_real = self.virtual_to_real.lock();
+        let mut real_to_virtual = self.real_to_virtual.lock();
+
+        if let Some(old_mapping) = virtual_to_real.insert(
+            virtual_handle,
+            HandleMapping {
+                virtual_handle,
+                real_handle,
+                resource_type,
+            },
+        ) {
+            real_to_virtual.remove(&old_mapping.real_handle);
+        }
+        real_to_virtual.insert(real_handle, virtual_handle);
     }
 
     /// Maps a virtual handle to a real TPM handle.
@@ -290,7 +330,7 @@ impl TpmResourceManager {
         &self,
         real_handle: TpmResourceHandle,
         resource_type: TpmResourceType,
-    ) -> TpmResourceHandle {
+    ) -> Option<TpmResourceHandle> {
         self.handle_virtualizer
             .allocate_virtual(real_handle, resource_type)
     }
@@ -317,6 +357,17 @@ impl TpmResourceManager {
     /// Returns true if the mapping was found and removed.
     pub fn remove_virtual_mapping(&self, virtual_handle: TpmResourceHandle) -> bool {
         self.handle_virtualizer.remove_by_virtual(virtual_handle)
+    }
+
+    /// Inserts or updates a virtual handle mapping.
+    pub fn set_virtual_handle_mapping(
+        &self,
+        virtual_handle: TpmResourceHandle,
+        real_handle: TpmResourceHandle,
+        resource_type: TpmResourceType,
+    ) {
+        self.handle_virtualizer
+            .set_virtual(virtual_handle, real_handle, resource_type);
     }
 
     /// Allocates a new logical resource handle.
@@ -685,9 +736,11 @@ mod tests {
     fn test_handle_virtualizer_allocate() {
         let virt = HandleVirtualizer::new();
         let real_handle = 0x80000001;
-        let virtual_handle = virt.allocate_virtual(real_handle, TpmResourceType::Key);
+        let virtual_handle = virt
+            .allocate_virtual(real_handle, TpmResourceType::Key)
+            .expect("transient virtual handle allocation should succeed");
 
-        assert!(virtual_handle >= FIRST_VIRTUAL_HANDLE);
+        assert_eq!(virtual_handle, 0x80FF_FFFF);
         assert_eq!(virt.mapping_count(), 1);
     }
 
@@ -695,7 +748,9 @@ mod tests {
     fn test_handle_virtualizer_mapping() {
         let virt = HandleVirtualizer::new();
         let real_handle = 0x80000001;
-        let virtual_handle = virt.allocate_virtual(real_handle, TpmResourceType::Key);
+        let virtual_handle = virt
+            .allocate_virtual(real_handle, TpmResourceType::Key)
+            .expect("transient virtual handle allocation should succeed");
 
         assert_eq!(virt.map_to_real(virtual_handle), Some(real_handle));
         assert_eq!(virt.map_to_virtual(real_handle), Some(virtual_handle));
@@ -707,10 +762,14 @@ mod tests {
         let virt2 = HandleVirtualizer::new();
         let real_handle = 0x80000001;
 
-        let vh1 = virt1.allocate_virtual(real_handle, TpmResourceType::Key);
-        let vh2 = virt2.allocate_virtual(real_handle, TpmResourceType::Key);
+        let vh1 = virt1
+            .allocate_virtual(real_handle, TpmResourceType::Key)
+            .expect("first transient virtual handle allocation should succeed");
+        let vh2 = virt2
+            .allocate_virtual(real_handle, TpmResourceType::Key)
+            .expect("second transient virtual handle allocation should succeed");
 
-        assert_ne!(vh1, vh2);
+        assert_eq!(vh1, vh2);
 
         assert_eq!(virt1.map_to_real(vh1), Some(real_handle));
         assert_eq!(virt2.map_to_real(vh2), Some(real_handle));
@@ -723,7 +782,9 @@ mod tests {
     fn test_handle_virtualizer_remove() {
         let virt = HandleVirtualizer::new();
         let real_handle = 0x80000001;
-        let virtual_handle = virt.allocate_virtual(real_handle, TpmResourceType::Key);
+        let virtual_handle = virt
+            .allocate_virtual(real_handle, TpmResourceType::Key)
+            .expect("transient virtual handle allocation should succeed");
 
         assert!(virt.remove_by_virtual(virtual_handle));
         assert_eq!(virt.map_to_real(virtual_handle), None);
@@ -734,11 +795,33 @@ mod tests {
     #[test]
     fn test_handle_virtualizer_clear() {
         let virt = HandleVirtualizer::new();
-        virt.allocate_virtual(0x80000001, TpmResourceType::Key);
-        virt.allocate_virtual(0x80000002, TpmResourceType::Key);
+        virt.allocate_virtual(0x80000001, TpmResourceType::Key)
+            .expect("first transient virtual handle allocation should succeed");
+        virt.allocate_virtual(0x80000002, TpmResourceType::Key)
+            .expect("second transient virtual handle allocation should succeed");
 
         assert_eq!(virt.mapping_count(), 2);
         virt.clear_all();
         assert_eq!(virt.mapping_count(), 0);
+    }
+
+    #[test]
+    fn test_handle_virtualizer_reuses_freed_transient_slot() {
+        let virt = HandleVirtualizer::new();
+        let handle1 = virt
+            .allocate_virtual(0x80000010, TpmResourceType::Key)
+            .expect("first transient virtual handle allocation should succeed");
+        let handle2 = virt
+            .allocate_virtual(0x80000011, TpmResourceType::Key)
+            .expect("second transient virtual handle allocation should succeed");
+
+        assert_eq!(handle1, 0x80FF_FFFF);
+        assert_eq!(handle2, 0x80FF_FFFE);
+        assert!(virt.remove_by_virtual(handle1));
+
+        let handle3 = virt
+            .allocate_virtual(0x80000012, TpmResourceType::Key)
+            .expect("reused transient virtual handle allocation should succeed");
+        assert_eq!(handle3, handle1);
     }
 }

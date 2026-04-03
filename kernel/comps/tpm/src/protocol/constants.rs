@@ -48,6 +48,8 @@ pub mod command {
 
 /// TPM 2.0 capability types.
 pub mod capability {
+    /// Handle list.
+    pub const TPM_CAP_HANDLES: u32 = 0x00000001;
     /// TPM properties.
     pub const TPM_CAP_TPM_PROPERTIES: u32 = 0x00000006;
     /// PCR properties.

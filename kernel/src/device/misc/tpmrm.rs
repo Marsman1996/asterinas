@@ -29,28 +29,6 @@ use crate::{
 const TPMRM_MINOR: u32 = 1;
 /// Upper bound for a TPM command submitted through the resource-manager device.
 const MAX_TPM_COMMAND_SIZE: usize = 64 * 1024;
-/// TPM2_CreatePrimary command code.
-const TPM2_CC_CREATE_PRIMARY: u32 = 0x0000_0131;
-/// TPM2_Load command code.
-const TPM2_CC_LOAD: u32 = 0x0000_0157;
-/// TPM2_StartAuthSession command code.
-const TPM2_CC_START_AUTH_SESSION: u32 = 0x0000_0176;
-/// TPM2_FlushContext command code.
-const TPM2_CC_FLUSH_CONTEXT: u32 = 0x0000_0165;
-/// TPM2_ContextLoad command code.
-const TPM2_CC_CONTEXT_LOAD: u32 = 0x0000_0161;
-/// Start of the HMAC session handle range.
-const TPM_HMAC_SESSION_HANDLE_START: u32 = 0x0200_0000;
-/// End of the HMAC session handle range.
-const TPM_HMAC_SESSION_HANDLE_END: u32 = 0x02FF_FFFF;
-/// Start of the policy session handle range.
-const TPM_POLICY_SESSION_HANDLE_START: u32 = 0x0300_0000;
-/// End of the policy session handle range.
-const TPM_POLICY_SESSION_HANDLE_END: u32 = 0x03FF_FFFF;
-/// Start of the transient object handle range.
-const TPM_TRANSIENT_HANDLE_START: u32 = 0x8000_0000;
-/// End of the transient object handle range.
-const TPM_TRANSIENT_HANDLE_END: u32 = 0x80FF_FFFF;
 
 /// Global TPM chip instance for resource manager.
 static TPMRM_CHIP: spin::Once<Arc<TpmChip>> = spin::Once::new();
@@ -379,52 +357,6 @@ impl InodeIo for TpmRmFile {
             } else {
                 None
             };
-
-            if response_code == Some(0) {
-                if cmd_code == TPM2_CC_START_AUTH_SESSION && response.len() >= 14 {
-                    // Parse session handle from response (first 4 bytes of body)
-                    let handle = u32::from_be_bytes([
-                        response[10],
-                        response[11],
-                        response[12],
-                        response[13],
-                    ]);
-                    if handle != 0 {
-                        self.space.track_session(handle);
-                    }
-                }
-
-                if (cmd_code == TPM2_CC_CREATE_PRIMARY
-                    || cmd_code == TPM2_CC_LOAD
-                    || cmd_code == TPM2_CC_CONTEXT_LOAD)
-                    && response.len() >= 14
-                {
-                    let handle = u32::from_be_bytes([
-                        response[10],
-                        response[11],
-                        response[12],
-                        response[13],
-                    ]);
-                    if (TPM_TRANSIENT_HANDLE_START..=TPM_TRANSIENT_HANDLE_END).contains(&handle) {
-                        self.space.track_object(handle);
-                    } else if (TPM_HMAC_SESSION_HANDLE_START..=TPM_HMAC_SESSION_HANDLE_END)
-                        .contains(&handle)
-                        || (TPM_POLICY_SESSION_HANDLE_START..=TPM_POLICY_SESSION_HANDLE_END)
-                            .contains(&handle)
-                    {
-                        self.space.track_session(handle);
-                    }
-                }
-            }
-
-            // Check if this was a FlushContext command and untrack the flushed handle.
-            if cmd_code == TPM2_CC_FLUSH_CONTEXT && read_len >= 14 && response_code == Some(0) {
-                // Parse handle from command (bytes 10-13)
-                let handle =
-                    u32::from_be_bytes([cmd_buf[10], cmd_buf[11], cmd_buf[12], cmd_buf[13]]);
-                self.space.untrack_session(handle);
-                self.space.untrack_object(handle);
-            }
         }
 
         // Store response for subsequent read.

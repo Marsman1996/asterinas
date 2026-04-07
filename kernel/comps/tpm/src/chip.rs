@@ -716,6 +716,7 @@ impl TpmChip {
     fn command_handle_count(command_code: u32) -> Option<usize> {
         match command_code {
             TPM2_CC_CREATE_PRIMARY => Some(1),
+            TPM2_CC_START_AUTH_SESSION => Some(2),
             TPM2_CC_EVICT_CONTROL => Some(2),
             TPM2_CC_SEQUENCE_COMPLETE => Some(1),
             TPM2_CC_ACTIVATE_CREDENTIAL => Some(2),
@@ -1374,19 +1375,17 @@ impl TpmChip {
         let mut mapped_count = 0usize;
         for _ in 0..count {
             let real_handle = read_u32_be(response, read_offset)?;
-            let mapped_handle = if matches!(
-                TpmResourceType::from_handle(real_handle),
-                Some(TpmResourceType::Key)
-            ) {
-                space.logical_object_handle_for_real(real_handle)
-            } else if matches!(
-                TpmResourceType::from_handle(real_handle),
-                Some(TpmResourceType::HmacSession | TpmResourceType::PolicySession)
-            ) {
-                space.logical_session_handle_for_real(real_handle)
-            } else {
-                Some(real_handle)
-            };
+            let mapped_handle =
+                if (handle::TRANSIENT_FIRST..handle::PERSISTENT_FIRST).contains(&real_handle) {
+                    space.logical_object_handle_for_real(real_handle)
+                } else if matches!(
+                    TpmResourceType::from_handle(real_handle),
+                    Some(TpmResourceType::HmacSession | TpmResourceType::PolicySession)
+                ) {
+                    space.logical_session_handle_for_real(real_handle)
+                } else {
+                    Some(real_handle)
+                };
 
             if let Some(logical_handle) = mapped_handle {
                 response[write_offset..write_offset + 4]
@@ -1625,6 +1624,22 @@ mod tests {
         cmd
     }
 
+    fn build_no_sessions_command(command_code: u32, command_handles: &[u32]) -> Vec<u8> {
+        let mut params = Vec::new();
+        for handle in command_handles {
+            write_u32_be(&mut params, *handle);
+        }
+
+        let header = TpmCommandHeader::new(
+            tag::TPM_ST_NO_SESSIONS,
+            (TPM_HEADER_SIZE + params.len()) as u32,
+            command_code,
+        );
+        let mut cmd = header.to_bytes();
+        cmd.extend_from_slice(&params);
+        cmd
+    }
+
     #[test]
     fn rewrite_auth_area_session_handles_rewrites_tracked_session() {
         let space = TpmSpace::new(1);
@@ -1670,6 +1685,33 @@ mod tests {
             cmd[session_offset + 3],
         ]);
         assert_eq!(rewritten, session::TPM_RS_PW);
+    }
+
+    #[test]
+    fn prepare_space_rewrites_both_start_auth_session_handles() {
+        let chip = TpmChip::new(DummyTransport);
+        let space = TpmSpace::new(1);
+
+        let real_tpm_key_handle = 0x8000_0000;
+        let logical_tpm_key_handle = space
+            .insert_loaded_object_with_real(real_tpm_key_handle)
+            .expect("transient vhandle slot should be available");
+        let real_bind_handle = 0x8000_0001;
+        let logical_bind_handle = space
+            .insert_loaded_object_with_real(real_bind_handle)
+            .expect("transient vhandle slot should be available");
+
+        let mut cmd = build_no_sessions_command(
+            TPM2_CC_START_AUTH_SESSION,
+            &[logical_tpm_key_handle, logical_bind_handle],
+        );
+
+        chip.prepare_space(&mut cmd, &space).unwrap();
+
+        let rewritten_tpm_key = u32::from_be_bytes([cmd[10], cmd[11], cmd[12], cmd[13]]);
+        let rewritten_bind = u32::from_be_bytes([cmd[14], cmd[15], cmd[16], cmd[17]]);
+        assert_eq!(rewritten_tpm_key, real_tpm_key_handle);
+        assert_eq!(rewritten_bind, real_bind_handle);
     }
 
     #[test]
@@ -1724,6 +1766,36 @@ mod tests {
         assert_eq!(
             read_u32_be(&response, TPM_HEADER_SIZE + 13).unwrap(),
             logical_session_handle
+        );
+    }
+
+    #[test]
+    fn get_capability_keeps_persistent_handles_visible() {
+        let chip = TpmChip::new(DummyTransport);
+        let space = TpmSpace::new(1);
+        let persistent_handle = 0x8100_0001;
+
+        let original_cmd =
+            build_get_capability_command(capability::TPM_CAP_HANDLES, persistent_handle, 1);
+
+        let mut response = Vec::new();
+        response.extend_from_slice(&tag::TPM_ST_NO_SESSIONS.to_be_bytes());
+        response.extend_from_slice(&0u32.to_be_bytes());
+        response.extend_from_slice(&rc::TPM_RC_SUCCESS.to_be_bytes());
+        response.push(0);
+        response.extend_from_slice(&capability::TPM_CAP_HANDLES.to_be_bytes());
+        response.extend_from_slice(&1u32.to_be_bytes());
+        response.extend_from_slice(&persistent_handle.to_be_bytes());
+        let response_size = response.len() as u32;
+        response[2..6].copy_from_slice(&response_size.to_be_bytes());
+
+        chip.commit_get_capability(&space, &original_cmd, &mut response)
+            .expect("persistent handle capability remap should succeed");
+
+        assert_eq!(read_u32_be(&response, TPM_HEADER_SIZE + 5).unwrap(), 1);
+        assert_eq!(
+            read_u32_be(&response, TPM_HEADER_SIZE + 9).unwrap(),
+            persistent_handle
         );
     }
 }

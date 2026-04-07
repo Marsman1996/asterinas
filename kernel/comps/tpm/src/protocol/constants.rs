@@ -120,6 +120,10 @@ pub mod session {
 
 /// TPM 2.0 handle ranges.
 pub mod handle {
+    /// Transient object handle range start.
+    pub const TRANSIENT_FIRST: u32 = 0x80000000;
+    /// Persistent object handle range start.
+    pub const PERSISTENT_FIRST: u32 = 0x81000000;
     /// Session handle range start.
     pub const TPM_HT_HMAC_SESSION: u32 = 0x02000000;
     /// Policy session handle range start.

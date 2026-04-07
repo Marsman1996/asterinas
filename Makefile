@@ -15,6 +15,8 @@ OVMF ?= on
 RELEASE ?= 0
 RELEASE_LTO ?= 0
 LOG_LEVEL ?= error
+TEST_TPM ?= off
+SWTPM_SOCK ?= /tmp/swtpm/swtpm-sock
 SCHEME ?= ""
 SMP ?= 1
 OSTD_TASK_STACK_SIZE_IN_PAGES ?= 64
@@ -84,6 +86,8 @@ SHELL := /bin/bash
 
 CARGO_OSDK := ~/.cargo/bin/cargo-osdk
 
+TPM_QEMU_ARGS := -chardev socket,id=chrtpm,path=$(SWTPM_SOCK) -tpmdev emulator,id=tpm0,chardev=chrtpm -device tpm-tis,tpmdev=tpm0
+
 # Common arguments for `cargo osdk` `build`, `run` and `test` commands.
 CARGO_OSDK_COMMON_ARGS := --target-arch=$(OSDK_TARGET_ARCH)
 # The build arguments also apply to the `cargo osdk run` command.
@@ -107,6 +111,10 @@ else ifeq ($(AUTO_TEST), vsock)
 ENABLE_BASIC_TEST := true
 export VSOCK=on
 CARGO_OSDK_BUILD_ARGS += --init-args="/test/run_vsock_test.sh"
+endif
+
+ifeq ($(TEST_TPM),on)
+ENABLE_BASIC_TEST := true
 endif
 
 ifeq ($(RELEASE_LTO), 1)
@@ -181,6 +189,10 @@ ifeq ($(ENABLE_KVM), 1)
 	ifeq ($(OSDK_TARGET_ARCH), x86_64)
 	CARGO_OSDK_COMMON_ARGS += --qemu-args="-accel kvm"
 	endif
+endif
+
+ifeq ($(TEST_TPM),on)
+CARGO_OSDK_COMMON_ARGS += --qemu-args="$(TPM_QEMU_ARGS)"
 endif
 
 # Skip GZIP to make encoding and decoding of initramfs faster

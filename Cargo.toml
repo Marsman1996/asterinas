@@ -38,6 +38,7 @@ members = [
     "kernel/comps/softirq",
     "kernel/comps/systree",
     "kernel/comps/time",
+    "kernel/comps/tpm",
     "kernel/comps/uart",
     "kernel/comps/virtio",
     "kernel/libs/aster-bigtcp",
@@ -109,6 +110,7 @@ aster-pci = { path = "kernel/comps/pci" }
 aster-softirq = { path = "kernel/comps/softirq" }
 aster-systree = { path = "kernel/comps/systree" }
 aster-time = { path = "kernel/comps/time" }
+aster-tpm = { path = "kernel/comps/tpm" }
 aster-uart = { path = "kernel/comps/uart" }
 aster-virtio = { path = "kernel/comps/virtio" }
 

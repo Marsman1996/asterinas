@@ -27,6 +27,7 @@ VSOCK=${VSOCK:-"off"}
 VIRTIOFS=${VIRTIOFS:-"off"}
 NETDEV=${NETDEV:-"user"}
 CONSOLE=${CONSOLE:-"hvc0"}
+TPM=${TPM:-"on"}
 
 ATTACH_XFSTESTS_IMAGES=${ATTACH_XFSTESTS_IMAGES:-false}
 if [ "${ENABLE_CONFORMANCE_TEST:-"false"}" = "true" ] && \
@@ -46,6 +47,32 @@ MEMCACHED_RAND_PORT=${MEMCACHED_PORT:-$(shuf -i 1024-65535 -n 1)}
 
 # Optional QEMU arguments. Opt in them manually if needed.
 # QEMU_OPT_ARG_DUMP_PACKETS="-object filter-dump,id=filter0,netdev=net01,file=virtio-net.pcap"
+
+TPM_ARGS=""
+if [ "$TPM" = "on" ] && [ "$1" != "riscv" ] && [ "$1" != "tdx" ]; then
+    if ! command -v swtpm >/dev/null 2>&1; then
+        echo "swtpm is required when TPM=on" 1>&2
+        exit 1
+    fi
+
+    TPM_STATE_DIR=${TPM_STATE_DIR:-"$PWD/target/swtpm"}
+    TPM_SOCKET="$TPM_STATE_DIR/swtpm.sock"
+    TPM_PID_FILE="$TPM_STATE_DIR/swtpm.pid"
+    mkdir -p "$TPM_STATE_DIR"
+
+    if [ ! -f "$TPM_PID_FILE" ] || ! kill -0 "$(cat "$TPM_PID_FILE")" 2>/dev/null; then
+        rm -f "$TPM_SOCKET" "$TPM_PID_FILE"
+        swtpm socket \
+            --tpm2 \
+            --tpmstate "dir=$TPM_STATE_DIR" \
+            --ctrl "type=unixio,path=$TPM_SOCKET" \
+            --pid "file=$TPM_PID_FILE" \
+            --log "file=$TPM_STATE_DIR/swtpm.log" \
+            --daemon
+    fi
+
+    TPM_ARGS="-chardev socket,id=chrtpm,path=$TPM_SOCKET -tpmdev emulator,id=tpm0,chardev=chrtpm -device tpm-tis,tpmdev=tpm0"
+fi
 
 if [ "$NETDEV" = "user" ]; then
     echo "[$1] Forwarded QEMU guest port: $SSH_RAND_PORT->22; $NGINX_RAND_PORT->8080 $REDIS_RAND_PORT->6379 $IPERF_RAND_PORT->5201 $LMBENCH_TCP_LAT_RAND_PORT->31234 $LMBENCH_TCP_BW_RAND_PORT->31236 $MEMCACHED_RAND_PORT->11211" 1>&2
@@ -143,6 +170,7 @@ COMMON_QEMU_ARGS="\
     -display vnc=0.0.0.0:${VNC_PORT:-42} \
     -monitor chardev:mux \
     -chardev stdio,id=mux,mux=on,signal=off,logfile=qemu.log \
+    $TPM_ARGS \
     $NETDEV_ARGS \
     $QEMU_OPT_ARG_DUMP_PACKETS \
     -device isa-debug-exit,iobase=0xf4,iosize=0x04 \

@@ -41,6 +41,7 @@ members = [
     "kernel/comps/softirq",
     "kernel/comps/systree",
     "kernel/comps/time",
+    "kernel/comps/tpm",
     "kernel/comps/uart",
     "kernel/comps/virtio",
     "kernel/libs/aster-bigtcp",
@@ -59,6 +60,7 @@ members = [
     "kernel/libs/sparse-id-alloc",
     "kernel/libs/typeflags",
     "kernel/libs/typeflags-util",
+    "kernel/libs/tpm-core",
     "kernel/libs/xarray",
 ]
 # All OSDK-based in-kernel crates.
@@ -89,6 +91,7 @@ default-members = [
     "kernel/comps/softirq",
     "kernel/comps/systree",
     "kernel/comps/time",
+    "kernel/comps/tpm",
     "kernel/comps/uart",
     "kernel/comps/virtio",
     "kernel/libs/aster-bigtcp",
@@ -98,6 +101,7 @@ default-members = [
     "kernel/libs/io-util",
     "kernel/libs/ring-buffer",
     "kernel/libs/sparse-id-alloc",
+    "kernel/libs/tpm-core",
     "kernel/libs/xarray",
 ]
 # All user-space or host-native crates.
@@ -163,6 +167,7 @@ aster-pci = { path = "kernel/comps/pci" }
 aster-softirq = { path = "kernel/comps/softirq" }
 aster-systree = { path = "kernel/comps/systree" }
 aster-time = { path = "kernel/comps/time" }
+aster-tpm = { path = "kernel/comps/tpm" }
 aster-uart = { path = "kernel/comps/uart" }
 aster-virtio = { path = "kernel/comps/virtio" }
 
@@ -183,11 +188,13 @@ ring-buffer = { path = "kernel/libs/ring-buffer" }
 sparse-id-alloc = { path = "kernel/libs/sparse-id-alloc" }
 typeflags = { path = "kernel/libs/typeflags" }
 typeflags-util = { path = "kernel/libs/typeflags-util" }
+tpm-core = { path = "kernel/libs/tpm-core" }
 xarray = { path = "kernel/libs/xarray" }
 
 # Crates under kernel/libs/comp-sys
 component = { path = "kernel/libs/comp-sys/component" }
 controlled = { path = "kernel/libs/comp-sys/controlled" }
+vstd = { version = "=0.0.0-2026-07-27-0206", default-features = false }
 
 # Crates under osdk/deps
 osdk-frame-allocator = { path = "osdk/deps/frame-allocator" }
@@ -212,12 +219,14 @@ volatile = "0.6.1"
 # This suggests that `Asterinas` should support saving and restoring the `FPU` state within the kernel context,
 # a capability it currently lacks.
 aes-gcm = { version = "0.9.4", features = ["force-soft"] }
+aes = { version = "0.8.4", default-features = false }
 bittle = "0.5.6"
 const_format = "0.2.35"
 ctr = "0.8.0"
 font8x8 = { version = "0.2.5", default-features = false, features = [ "unicode" ] }
 getset = "0.1.2"
 hashbrown = { version = "0.14.3", features = ["serde"]  }
+hmac = { version = "0.13.0", default-features = false }
 inventory = { git = "https://github.com/asterinas/inventory", rev = "9dce587" }
 itertools = "0.10.5"
 lending-iterator = "0.1.7"
@@ -249,6 +258,8 @@ log = "0.4"
 no_std_io2 = { version = "0.9.3", default-features = false, features = ["alloc", "nightly"] }
 rand = { version = "0.9.2", default-features = false }
 spin = "0.9.4"
+sha2 = { version = "0.11.0", default-features = false }
+cfb-mode = { version = "0.8.2", default-features = false }
 x86_64 = "0.15.5"
 tdx-guest = "0.4.0"
 xmas-elf = "0.10.0"

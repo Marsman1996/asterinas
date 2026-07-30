@@ -14,6 +14,7 @@ OVMF ?= on
 RELEASE ?= 0
 RELEASE_LTO ?= 0
 LOG_LEVEL ?= error
+TEST_TPM ?= on
 SCHEME ?= ""
 SMP ?= 1
 OSTD_TASK_STACK_SIZE_IN_PAGES ?= 64
@@ -128,6 +129,10 @@ else ifeq ($(AUTO_TEST), vsock)
 ENABLE_REGRESSION_TEST := true
 export VSOCK=on
 CARGO_OSDK_BUILD_ARGS += --init-args="/test/run_vsock_test.sh"
+endif
+
+ifeq ($(TEST_TPM),on)
+ENABLE_REGRESSION_TEST := true
 endif
 
 ifeq ($(RELEASE_LTO), 1)

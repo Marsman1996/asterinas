@@ -1,6 +1,9 @@
 #![no_std]
 #![cfg(target_arch = "x86_64")]
 
+extern crate alloc;
+
+use alloc::sync::Arc;
 use component::{ComponentInitError, init_component};
 use spin::Once;
 
@@ -24,21 +27,38 @@ macro_rules! __log_prefix {
 // 需要中止时走 ostd::panic::abort;需要日志走 ostd::log 宏;需要锁走
 // ostd::sync,别自带一套。
 
-pub mod mmio;
+pub mod chip;
+pub mod error;
 pub mod extcrypto;
+pub mod mmio;
+pub mod protocol;
+pub mod resource;
+pub mod session;
+pub mod space;
+pub mod transport;
 
 // 只可能待在 hal 的两段:硬件锁 + 开机探测胶水。都是纯 Rust,不进 Verus。
 pub mod device;
 
-pub use mmio::TisMmio;
-pub use extcrypto::{check_abi, ExtAesCfb, ExtHmacSha256, ExtRng, ExtSha256, HASH_CTX_CAP};
+pub use chip::TpmChip;
 pub use device::{probe, TpmDevice, TpmInitErr, TPM_TIS_BASE, TPM_TIS_SIZE};
+pub use error::TpmError;
+pub use extcrypto::{check_abi, ExtAesCfb, ExtHmacSha256, ExtRng, ExtSha256, HASH_CTX_CAP};
+pub use mmio::TisMmio;
+pub use space::{TpmSpace, TpmSpaceManager};
+pub use transport::TpmTransport;
 
 static TPM_DEVICE: Once<TpmDevice> = Once::new();
+static TPM_CHIP: Once<Arc<TpmChip>> = Once::new();
 
 /// Returns the initialized TPM device, if a TIS-compatible TPM was discovered.
 pub fn device() -> Option<&'static TpmDevice> {
     TPM_DEVICE.get()
+}
+
+/// Returns the shared chip abstraction used by `/dev/tpm0` and `/dev/tpmrm0`.
+pub fn get_chip() -> Option<Arc<TpmChip>> {
+    TPM_CHIP.get().cloned()
 }
 
 #[init_component]
@@ -46,6 +66,10 @@ fn init() -> Result<(), ComponentInitError> {
     match probe() {
         Ok(device) => {
             TPM_DEVICE.call_once(|| device);
+            let chip = Arc::new(TpmChip::new(transport::FormalTransport::new()));
+            // `probe` has already completed Startup, SelfTest, and capability discovery.
+            chip.force_initialized();
+            TPM_CHIP.call_once(|| chip);
             ostd::early_println!("tpm: ready");
         }
         Err(_) => {

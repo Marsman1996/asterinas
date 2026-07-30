@@ -397,6 +397,7 @@ dependencies = [
  "cfb-mode",
  "component",
  "hmac",
+ "log",
  "ostd",
  "sha2",
  "spin",

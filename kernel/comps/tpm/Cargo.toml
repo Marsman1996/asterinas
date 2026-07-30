@@ -8,6 +8,7 @@ aes.workspace = true
 cfb-mode.workspace = true
 component.workspace = true
 hmac.workspace = true
+log.workspace = true
 ostd.workspace = true
 sha2.workspace = true
 spin.workspace = true

@@ -106,7 +106,11 @@ pub const POLL_INTERVAL_MS: u32 = 1;
 
 /// 规范给出的四档超时（毫秒）。
 pub const TIMEOUT_A_MS: u32 = 750;
-pub const TIMEOUT_B_MS: u32 = 4000;
+// Software TPM backends may need substantially longer than four seconds for
+// asymmetric-key operations such as TPM2_Create. Keep the TIS response wait
+// conservative so a valid, still-running command is not aborted as a transport
+// failure.
+pub const TIMEOUT_B_MS: u32 = 120_000;
 pub const TIMEOUT_C_MS: u32 = 750;
 pub const TIMEOUT_D_MS: u32 = 750;
 

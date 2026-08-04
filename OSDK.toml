@@ -11,6 +11,9 @@ boot_protocol = "multiboot2"
 [qemu]
 args = "$(./tools/qemu_args.sh normal)"
 
+[build]
+rustflags = "--cfg aes_force_soft --cfg sha2_backend=\"soft\""
+
 # Special options for running
 [run.boot]
 kcmd_args = [

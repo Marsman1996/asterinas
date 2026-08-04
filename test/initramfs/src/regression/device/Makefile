@@ -2,6 +2,7 @@
 
 SUBDIRS := \
 	pty \
+	tpm \
 	vt
 
 include ../common/Makefile

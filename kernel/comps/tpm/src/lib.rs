@@ -4,6 +4,7 @@
 extern crate alloc;
 
 use alloc::sync::Arc;
+
 use component::{ComponentInitError, init_component};
 use spin::Once;
 
@@ -41,9 +42,9 @@ pub mod transport;
 pub mod device;
 
 pub use chip::TpmChip;
-pub use device::{probe, TpmDevice, TpmInitErr, TPM_TIS_BASE, TPM_TIS_SIZE};
+pub use device::{TPM_TIS_BASE, TPM_TIS_SIZE, TpmDevice, TpmInitErr, probe};
 pub use error::TpmError;
-pub use extcrypto::{check_abi, ExtAesCfb, ExtHmacSha256, ExtRng, ExtSha256, HASH_CTX_CAP};
+pub use extcrypto::{ExtAesCfb, ExtHmacSha256, ExtRng, ExtSha256, HASH_CTX_CAP, check_abi};
 pub use mmio::TisMmio;
 pub use space::{TpmSpace, TpmSpaceManager};
 pub use transport::TpmTransport;

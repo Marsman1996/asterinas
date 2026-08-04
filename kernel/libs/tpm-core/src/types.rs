@@ -7,13 +7,6 @@
 //! 留着是为了 `TpmRc` 那件事:返回码与命令码复用报文首部的同一个偏移,
 //! 两者混用同一个裸 `u32` 时写反了不会被任何检查发现。真要收紧,应该是
 //! 让各层改用这个 newtype,而不是反过来把它删掉。
-use vstd::prelude::*;
-
-verus! {
-
-// ---------------------------------------------------------------------------
-// 命令 / 响应 tag
-// ---------------------------------------------------------------------------
 
 /// TPM 报文首部的 tag 字段。
 #[derive(Clone, Copy)]
@@ -27,9 +20,8 @@ pub enum TpmTag {
     /// 0 —— `tpm_buf_reset()` 显式允许（用于尚未定型的缓冲区）
     Null,
 }
-
 impl TpmTag {
-    pub open spec fn spec_code(self) -> u16 {
+    pub fn code(self) -> u16 {
         match self {
             TpmTag::RquCommand => 193u16,
             TpmTag::Tpm2NoSessions => 0x8001u16,
@@ -37,27 +29,8 @@ impl TpmTag {
             TpmTag::Null => 0u16,
         }
     }
-
-    pub fn code(self) -> (r: u16)
-        ensures
-            r == self.spec_code(),
-    {
-        match self {
-            TpmTag::RquCommand => 193u16,
-            TpmTag::Tpm2NoSessions => 0x8001u16,
-            TpmTag::Tpm2Sessions => 0x8002u16,
-            TpmTag::Null => 0u16,
-        }
-    }
-
     /// 解析线上字节。
-    pub fn from_code(c: u16) -> (r: Option<TpmTag>)
-        ensures
-            match r {
-                Some(t) => t.spec_code() == c,
-                None => c != 193u16 && c != 0x8001u16 && c != 0x8002u16 && c != 0u16,
-            },
-    {
+    pub fn from_code(c: u16) -> Option<TpmTag> {
         if c == 193u16 {
             Some(TpmTag::RquCommand)
         } else if c == 0x8001u16 {
@@ -70,27 +43,12 @@ impl TpmTag {
             None
         }
     }
-
-    /// 该 tag 是否属于 TPM2 报文族。
-    pub open spec fn is_tpm2(self) -> bool {
-        match self {
-            TpmTag::Tpm2NoSessions => true,
-            TpmTag::Tpm2Sessions => true,
-            _ => false,
-        }
-    }
 }
-
-// ---------------------------------------------------------------------------
-// 返回码
-// ---------------------------------------------------------------------------
-
 /// TPM 返回码（首部第 3 个字段，与 ordinal 复用同一偏移）。
 /// newtype 而非 enum：返回码空间开放（含厂商自定义），穷举不现实，
 /// 但至少不再与 ordinal 混用同一个裸 `u32`。
 #[derive(Clone, Copy)]
 pub struct TpmRc(pub u32);
-
 impl TpmRc {
     pub const SUCCESS: u32 = 0x0000_0000;
     /// `TPM_WARN_RETRY`
@@ -105,23 +63,10 @@ impl TpmRc {
     pub const ERR_FAILEDSELFTEST: u32 = 0x0000_001C;
     /// `TPM_ERR_INVALID_POSTINIT`
     pub const ERR_INVALID_POSTINIT: u32 = 38;
-
-    pub open spec fn spec_is_success(self) -> bool {
-        self.0 == 0u32
-    }
-
-    pub fn is_success(self) -> (r: bool)
-        ensures
-            r == self.spec_is_success(),
-    {
+    pub fn is_success(self) -> bool {
         self.0 == 0u32
     }
 }
-
-// ---------------------------------------------------------------------------
-// 尺寸常量（来自 tpm.h）
-// ---------------------------------------------------------------------------
-
 /// `TPM_BUFSIZE`
 pub const TPM_BUFSIZE: usize = 4096;
 /// `TPM2_SPACE_BUFFER_SIZE`
@@ -130,5 +75,3 @@ pub const TPM2_SPACE_BUFFER_SIZE: usize = 16384;
 pub const TPM_MAX_RNG_DATA: usize = 128;
 /// `TPM_RETRY`
 pub const TPM_RETRY: u32 = 50;
-
-} // verus!

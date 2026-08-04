@@ -9,17 +9,13 @@
 
 use core::ops::Range;
 
-use ostd::mm::Paddr;
-use ostd::sync::SpinLock;
-
-use crate::extcrypto::check_abi;
-use crate::mmio::TisMmio;
-
+use ostd::{mm::Paddr, sync::SpinLock};
 use tpm_core::chip::ChipTransport; // exec() 来自这个 trait,要在作用域里才能调
-use tpm_core::cmd::SU_CLEAR;
-use tpm_core::module::IoErr;
-use tpm_core::tis::TisErr;
-use tpm_core::{bring_up, BootErr, ChipLink, Limits, Tis, Xfer};
+use tpm_core::{
+    BootErr, ChipLink, Limits, Tis, Xfer, bring_up, cmd::SU_CLEAR, module::IoErr, tis::TisErr,
+};
+
+use crate::{extcrypto::check_abi, mmio::TisMmio};
 
 // ===========================================================================
 // 芯片在总线上的位置
@@ -120,7 +116,11 @@ pub fn probe() -> Result<TpmDevice, TpmInitErr> {
     let mmio = TisMmio::acquire(phys, POLL_SPIN).map_err(TpmInitErr::Mmio)?;
 
     // 2. 组装。locality 用 0(驱动默认使用的 locality),尚未持有。
-    let tis = Tis { phy: mmio, locality: 0, held: false };
+    let tis = Tis {
+        phy: mmio,
+        locality: 0,
+        held: false,
+    };
     let x = Xfer::new(tis);
 
     // 3. 引导。SU_CLEAR = 冷启动;需要从保存状态恢复时改用 SU_STATE。

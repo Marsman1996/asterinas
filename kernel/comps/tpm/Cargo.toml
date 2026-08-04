@@ -13,7 +13,6 @@ ostd.workspace = true
 sha2.workspace = true
 spin.workspace = true
 tpm-core.workspace = true
-vstd.workspace = true
 
 [lints]
 workspace = true

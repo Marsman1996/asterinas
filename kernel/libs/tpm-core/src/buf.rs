@@ -10,7 +10,8 @@
 //! 与其余各层就地返回 `Result` 的做法不是一回事;字节序也走 `endian`
 //! 而非 `cursor`。两种做法并存已经够了,不宜再多一处。
 
-use crate::{compat::*, endian::*, types::TpmTag};
+use crate::endian::*;
+use crate::types::TpmTag;
 
 /// `struct tpm_header` 的大小：tag(2) + length(4) + ordinal/return_code(4)。
 pub const TPM_HEADER_SIZE: usize = 10;
@@ -54,12 +55,10 @@ impl<const N: usize> TpmBuf<N> {
             BufKind::Tpm2b => {
                 let sz: u16 = (self.length - TPM2B_HEADER_SIZE) as u16;
                 self.put_be16(0, sz);
-                {}
             }
             BufKind::Command => {
                 let l: u32 = self.length as u32;
                 self.put_be32(2, l);
-                {}
             }
         }
     }
@@ -74,7 +73,6 @@ impl<const N: usize> TpmBuf<N> {
         self.put_be16(0, t);
         self.put_be32(2, TPM_HEADER_SIZE as u32);
         self.put_be32(6, ordinal);
-        {}
     }
     /// 对应 `tpm_buf_reset_sized()`。
     pub fn reset_sized(&mut self) {
@@ -84,7 +82,6 @@ impl<const N: usize> TpmBuf<N> {
         self.handles = 0;
         self.length = TPM2B_HEADER_SIZE;
         self.put_be16(0, 0u16);
-        {}
     }
     /// 对应 `tpm_buf_init()`：分配 + 初始化。
     pub fn new_command(tag: TpmTag, ordinal: u32) -> Self {
@@ -125,13 +122,12 @@ impl<const N: usize> TpmBuf<N> {
         let start: usize = self.length;
         let mut i: usize = 0;
         while i < src.len() {
-            let b: u8 = *slice_index_get(src, i);
+            let b: u8 = *&src[i];
             self.data[start + i] = b;
             i = i + 1;
         }
         self.length = start + src.len();
         self.sync_length();
-        {}
     }
     pub fn append_u8(&mut self, v: u8) {
         if self.overflow {
@@ -145,7 +141,6 @@ impl<const N: usize> TpmBuf<N> {
         self.data[start] = v;
         self.length = start + 1;
         self.sync_length();
-        {}
     }
     pub fn append_u16(&mut self, v: u16) {
         if self.overflow {
@@ -159,7 +154,6 @@ impl<const N: usize> TpmBuf<N> {
         self.put_be16(start, v);
         self.length = start + 2;
         self.sync_length();
-        {}
     }
     pub fn append_u32(&mut self, v: u32) {
         if self.overflow {
@@ -173,7 +167,6 @@ impl<const N: usize> TpmBuf<N> {
         self.put_be32(start, v);
         self.length = start + 4;
         self.sync_length();
-        {}
     }
     /// 对应 `tpm_buf_append_handle()`。
     pub fn append_handle(&mut self, handle: u32) -> bool {
@@ -203,7 +196,7 @@ impl<const N: usize> TpmBuf<N> {
             self.boundary_error = true;
             return 0;
         }
-        let v = *array_index_get(&self.data, *offset);
+        let v = *&self.data[*offset];
         *offset = *offset + 1;
         v
     }
@@ -217,8 +210,8 @@ impl<const N: usize> TpmBuf<N> {
             return 0;
         }
         let o = *offset;
-        let b0 = *array_index_get(&self.data, o);
-        let b1 = *array_index_get(&self.data, o + 1);
+        let b0 = *&self.data[o];
+        let b1 = *&self.data[o + 1];
         *offset = o + 2;
         be16_of_exec(b0, b1)
     }
@@ -232,10 +225,10 @@ impl<const N: usize> TpmBuf<N> {
             return 0;
         }
         let o = *offset;
-        let b0 = *array_index_get(&self.data, o);
-        let b1 = *array_index_get(&self.data, o + 1);
-        let b2 = *array_index_get(&self.data, o + 2);
-        let b3 = *array_index_get(&self.data, o + 3);
+        let b0 = *&self.data[o];
+        let b1 = *&self.data[o + 1];
+        let b2 = *&self.data[o + 2];
+        let b3 = *&self.data[o + 3];
         *offset = o + 4;
         be32_of_exec(b0, b1, b2, b3)
     }
@@ -260,6 +253,6 @@ impl<const N: usize> TpmBuf<N> {
     }
     /// 交给传输层的线上字节。**没有溢出时才有意义**，故要求 `!overflow`。
     pub fn as_wire(&self) -> &[u8] {
-        slice_subrange(array_as_slice(&self.data), 0, self.length)
+        &self.data[0..self.length]
     }
 }

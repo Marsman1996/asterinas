@@ -1,3 +1,4 @@
+
 /// 全 1 的 u32,做饱和上限用。写成 u64 常量,避免在乘法里现算。
 const U32_MAX_U64: u64 = 0xFFFF_FFFF;
 /// TIS 超时 A 档的合理量级在几十万微秒。报出的值虽非零却小于这个界,只可能是
@@ -10,12 +11,7 @@ pub const TIMEOUT_USEC_THRESHOLD: u32 = 1000;
 /// 结果为正(乘法保正)——后者是上层「时长恒为正」契约的下半截。
 pub fn sat_mul_1000(v: u32) -> u32 {
     let w: u64 = (v as u64) * 1000;
-    {}
-    if w > U32_MAX_U64 {
-        0xFFFF_FFFF
-    } else {
-        w as u32
-    }
+    if w > U32_MAX_U64 { 0xFFFF_FFFF } else { w as u32 }
 }
 /// 四档 TIS 超时(微秒)。
 pub struct Timeouts {
@@ -62,21 +58,9 @@ pub fn scale_durations(
     short_threshold: u32,
     short_floor: u32,
 ) -> Durations {
-    let mut s = if chip.short != 0 {
-        chip.short
-    } else {
-        defaults.short
-    };
-    let mut m = if chip.medium != 0 {
-        chip.medium
-    } else {
-        defaults.medium
-    };
-    let mut l = if chip.long != 0 {
-        chip.long
-    } else {
-        defaults.long
-    };
+    let mut s = if chip.short != 0 { chip.short } else { defaults.short };
+    let mut m = if chip.medium != 0 { chip.medium } else { defaults.medium };
+    let mut l = if chip.long != 0 { chip.long } else { defaults.long };
     if s < short_threshold {
         s = short_floor;
         m = sat_mul_1000(m);

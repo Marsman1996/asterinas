@@ -1,3 +1,4 @@
+
 pub fn be16_of_exec(b0: u8, b1: u8) -> u16 {
     ((b0 as u16) << 8) | (b1 as u16)
 }

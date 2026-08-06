@@ -1,3 +1,5 @@
+use alloc::vec::Vec;
+
 use super::handle::*;
 
 /// 上下文表的槽位状态。
@@ -9,6 +11,11 @@ pub enum CtxSlot {
     Saved,
     /// 槽位持有一个活跃的物理句柄。
     Live(u32),
+}
+/// 表的抽象状态。字段全公开，供上层写规约。
+pub struct TableView {
+    pub ctx: Vec<CtxSlot>,
+    pub sessions: Vec<u32>,
 }
 #[derive(Clone, Copy)]
 pub struct SpaceTable {
@@ -25,11 +32,7 @@ impl SpaceTable {
     }
     /// 把槽位置为空闲或已保存。这两种状态不携带句柄，永远不破坏不变量。
     pub fn set_slot_free(&mut self, i: usize, saved: bool) {
-        self.ctx[i] = if saved {
-            CtxSlot::Saved
-        } else {
-            CtxSlot::Empty
-        };
+        self.ctx[i] = if saved { CtxSlot::Saved } else { CtxSlot::Empty };
     }
     /// 把槽位置为活跃。要求句柄合法且未被登记过。
     ///
@@ -37,9 +40,7 @@ impl SpaceTable {
     /// 装载路径）本来就已经查过一遍表，再查一次纯属浪费。单射性由此
     /// 条前置条件承接，不引入任何信任假设。
     pub fn set_slot_live(&mut self, i: usize, p: u32) {
-        {}
         self.ctx[i] = CtxSlot::Live(p);
-        {}
     }
     /// 虚拟句柄 → 物理句柄。
     pub fn resolve(&self, v: u32) -> Option<u32> {
@@ -60,7 +61,6 @@ impl SpaceTable {
         let mut i: usize = 0;
         while i < SLOTS {
             if self.ctx[i] == CtxSlot::Live(p) {
-                {}
                 return Some(vhandle_of_exec(i));
             }
             i += 1;
@@ -76,7 +76,6 @@ impl SpaceTable {
         while i < SLOTS {
             if self.ctx[i] == CtxSlot::Empty {
                 self.set_slot_live(i, p);
-                {}
                 return Some(vhandle_of_exec(i));
             }
             i += 1;
@@ -88,9 +87,7 @@ impl SpaceTable {
         let mut i: usize = 0;
         while i < SLOTS {
             if self.sessions[i] == 0 {
-                {}
                 self.sessions[i] = h;
-                {}
                 return true;
             }
             i += 1;
@@ -101,12 +98,10 @@ impl SpaceTable {
         let mut i: usize = 0;
         while i < SLOTS {
             if self.sessions[i] == h {
-                {}
                 return true;
             }
             i += 1;
         }
-        {}
         false
     }
     pub fn session_at(&self, i: usize) -> u32 {

@@ -1,16 +1,15 @@
-#[cfg(verus_keep_ghost)]
-pub use crate::handle::{SLOTS, is_session, is_transient, valid_phandle};
-#[cfg(not(verus_keep_ghost))]
+
 pub use crate::handle::{
-    SLOTS, is_session_exec as is_session, is_transient_exec as is_transient,
+    SLOTS,
+    is_session_exec as is_session,
+    is_transient_exec as is_transient,
     valid_phandle_exec as valid_phandle,
 };
 pub use crate::rewrite::{HeaderOutcome, SpaceErr};
-#[cfg(not(verus_keep_ghost))]
 pub use crate::table::{CtxSlot, SpaceTable};
-#[cfg(verus_keep_ghost)]
-pub use crate::table::{CtxSlot, SpaceTable, live_handle};
-use crate::{handle::*, table::*};
+
+use crate::handle::*;
+use crate::table::*;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum IoErr {
@@ -21,7 +20,19 @@ pub enum IoErr {
     Integrity,
     /// 备份缓冲区放不下。
     NoSpace,
-    /// 其余不可恢复错误。
+    /// 轮询预算耗尽，纯粹的等待超时，值得按退避策略重试。
+    Timeout,
+    /// 物理总线故障，重试没有意义。
+    Bus,
+    /// 芯片返回的东西违反协议约定（长度、状态位与规范不符）。
+    Protocol,
+    /// 调用方交下来的命令本身不自洽（长度字段与缓冲区对不上）。
+    /// 这是编码层的逻辑错误，不是设备故障。
+    BadCommand,
+    /// 调用时序错误：接口在不满足前提的状态下被调用。
+    NotReady,
+    /// 表与芯片状态已经无法调和的内部不变量破裂，唯一安全动作是
+    /// 整体清空重来。
     Fatal,
 }
 /// 上下文存取的抽象接口。
@@ -53,9 +64,7 @@ pub struct Transaction {
 }
 impl Space {
     pub fn new() -> Self {
-        Space {
-            tbl: SpaceTable::new(),
-        }
+        Space { tbl: SpaceTable::new() }
     }
     /// 取一份工作副本。使用者可见的状态在此期间保持不变。
     pub fn begin(&self) -> Transaction {
@@ -125,18 +134,20 @@ pub fn load_space<I: ContextIo>(
             CtxSlot::Empty => {}
             CtxSlot::Live(_) => {
                 flush_all(tbl, io);
-                return Err(IoErr::Fatal);
+                return Err(IoErr::NotReady);
             }
-            CtxSlot::Saved => match io.load(ctx_buf, off) {
-                Ok((h, used)) => {
-                    tbl.set_slot_live(i, h);
-                    off = off + used;
+            CtxSlot::Saved => {
+                match io.load(ctx_buf, off) {
+                    Ok((h, used)) => {
+                        tbl.set_slot_live(i, h);
+                        off = off + used;
+                    }
+                    Err(e) => {
+                        flush_all(tbl, io);
+                        return Err(e);
+                    }
                 }
-                Err(e) => {
-                    flush_all(tbl, io);
-                    return Err(e);
-                }
-            },
+            }
         }
         i += 1;
     }
@@ -148,7 +159,7 @@ pub fn load_space<I: ContextIo>(
                 Ok((h, used)) => {
                     if h != tbl.session_at(i) {
                         flush_all(tbl, io);
-                        return Err(IoErr::Fatal);
+                        return Err(IoErr::Integrity);
                     }
                     off = off + used;
                 }
@@ -179,20 +190,22 @@ pub fn save_space<I: ContextIo>(
     let mut off: usize = 0;
     while i < SLOTS {
         match tbl.slot_at(i) {
-            CtxSlot::Live(h) => match io.save(h, ctx_buf, off) {
-                Ok(used) => {
-                    io.flush(h);
-                    tbl.set_slot_free(i, true);
-                    off = off + used;
+            CtxSlot::Live(h) => {
+                match io.save(h, ctx_buf, off) {
+                    Ok(used) => {
+                        io.flush(h);
+                        tbl.set_slot_free(i, true);
+                        off = off + used;
+                    }
+                    Err(IoErr::NotFound) => {
+                        tbl.set_slot_free(i, false);
+                    }
+                    Err(e) => {
+                        flush_all(tbl, io);
+                        return Err(e);
+                    }
                 }
-                Err(IoErr::NotFound) => {
-                    tbl.set_slot_free(i, false);
-                }
-                Err(e) => {
-                    flush_all(tbl, io);
-                    return Err(e);
-                }
-            },
+            }
             _ => {}
         }
         i += 1;

@@ -1,4 +1,5 @@
-use crate::{compat::*, cursor::*};
+
+use crate::cursor::*;
 
 pub const HEADER_LEN: usize = 10;
 /// 请求标签。本驱动只构造这一种——它不参与任何需要授权会话的操作,因此永远
@@ -56,7 +57,7 @@ pub fn parse_response1(raw: &[u8]) -> Result<Response1<'_>, Parse1Error> {
     if rc != RC_SUCCESS {
         return Err(Parse1Error::TpmError(rc));
     }
-    let body = slice_subrange(raw, HEADER_LEN, raw.len());
+    let body = &raw[HEADER_LEN..raw.len()];
     Ok(Response1 { rc, body })
 }
 /// 给定编号与总长度,生成 10 字节请求头。

@@ -1,3 +1,4 @@
+
 /// 上下文表与会话表的槽位数。
 pub const SLOTS: usize = 3;
 /// 句柄类型由最高字节区分。
@@ -8,7 +9,6 @@ pub const HT_TRANSIENT: u32 = 0x8000_0000;
 /// 上下文表里表示「已保存、尚未装载」的哨兵值。
 pub const CTX_SAVED_SENTINEL: u32 = 0xFFFF_FFFF;
 pub fn vhandle_of_exec(i: usize) -> u32 {
-    {}
     0x80FF_FFFFu32 - (i as u32)
 }
 /// 反解槽位号。返回 `usize`，越界由调用方用 `< SLOTS` 判断。

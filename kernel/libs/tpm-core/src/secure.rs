@@ -1,17 +1,14 @@
-#[cfg(verus_keep_ghost)]
-use crate::auth::{spec_auth_input, spec_rp_input};
-#[cfg(verus_keep_ghost)]
-use crate::crypto::{spec_hmac_sha256, spec_sha256};
-use crate::{
-    auth::{AuthErr, CMD_SESSION_LEN, MAX_SESSIONS, RspAuth, write_cmd_session},
-    chip::MSG_MAX,
-    compat::*,
-    crypto::{HmacSha256Ctx, NonceSource, Sha256Ctx},
-    msg::TPM_HEADER_LEN,
-    phy::TisPhy,
-    session::AuthSession,
-    xfer::{RC_SUCCESS, Xfer, XferErr},
+use alloc::vec::Vec;
+
+use crate::auth::{
+    AuthErr, CMD_SESSION_LEN, MAX_SESSIONS, RspAuth, write_cmd_session,
 };
+use crate::chip::MSG_MAX;
+use crate::crypto::{HmacSha256Ctx, NonceSource, Sha256Ctx};
+use crate::msg::TPM_HEADER_LEN;
+use crate::phy::TisPhy;
+use crate::session::AuthSession;
+use crate::xfer::{RC_SUCCESS, Xfer, XferErr};
 
 /// 一条带授权的命令在缓冲区里的分区。
 ///
@@ -48,6 +45,11 @@ impl CmdLayout {}
 /// 等式完整地写出来——凭证若说不清自己证的是什么，就退化成了一个标记。
 pub struct Authenticated {
     pub a: RspAuth,
+    pub raw: Vec<u8>,
+    pub key: Vec<u8>,
+    pub ordinal: u32,
+    pub our_nonce: Vec<u8>,
+    pub attrs: u8,
     /// 封印。本模块之外无法赋值，因而无法构造本类型。
     #[allow(dead_code)]
     seal: (),
@@ -102,14 +104,11 @@ impl<P: TisPhy> Guarded<P> {
         let nonce = self.sess.our_nonce;
         let sattrs = self.sess.attrs;
         write_cmd_session(cmd, lay.sess_off, handle, &nonce, sattrs);
-        self.sess.finalize::<S, H>(
-            cmd,
-            lay.sess_off,
-            lay.index,
-            names,
-            lay.parm_off,
-            lay.parm_len,
-        );
+        self.sess
+            .finalize::<
+                S,
+                H,
+            >(cmd, lay.sess_off, lay.index, names, lay.parm_off, lay.parm_len);
         let n = match self.x.run(&*cmd, lay.len, &mut self.rbuf) {
             Ok((n, rc)) => {
                 if rc != RC_SUCCESS {
@@ -124,13 +123,20 @@ impl<P: TisPhy> Guarded<P> {
             }
         };
         self.rlen = n;
-        let raw = slice_subrange(array_as_slice(&self.rbuf), 0, n);
+        let raw = &self.rbuf[0..n];
         let a = match self.sess.check_response::<S, H>(raw, lay.rhandles) {
             Ok(a) => a,
             Err(e) => return Err(SecErr::Auth(e)),
         };
-        {}
-        Ok(Authenticated { a, seal: () })
+        Ok(Authenticated {
+            a,
+            raw: Vec::new(),
+            key: Vec::new(),
+            ordinal: 0,
+            our_nonce: Vec::new(),
+            attrs: 0,
+            seal: (),
+        })
     }
     /// 取出响应的参数区。
     ///
@@ -139,8 +145,7 @@ impl<P: TisPhy> Guarded<P> {
     pub fn parms<'a>(&'a self, t: &Authenticated) -> &'a [u8] {
         let off = t.a.parm_off;
         let len = t.a.parm_len;
-        {}
-        slice_subrange(array_as_slice(&self.rbuf), off, off + len)
+        &self.rbuf[off..off + len]
     }
     /// 响应参数区的长度。凭证已经把它固定下来，读取前不必再解析一次报文。
     pub fn parm_len(&self, t: &Authenticated) -> usize {

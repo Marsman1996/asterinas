@@ -1,12 +1,9 @@
-use crate::{
-    cursor::*,
-    tpm1::{
-        msg::{HEADER_LEN, TAG_RQU_COMMAND, build_header1},
-        ord::{
-            ORD_CONTINUE_SELF_TEST, ORD_EXTEND, ORD_GET_CAPABILITY, ORD_GET_RANDOM, ORD_PCR_READ,
-            ORD_SAVE_STATE, ORD_STARTUP,
-        },
-    },
+
+use crate::cursor::*;
+use crate::tpm1::msg::{build_header1, HEADER_LEN, TAG_RQU_COMMAND};
+use crate::tpm1::ord::{
+    ORD_CONTINUE_SELF_TEST, ORD_EXTEND, ORD_GET_CAPABILITY, ORD_GET_RANDOM, ORD_PCR_READ,
+    ORD_SAVE_STATE, ORD_STARTUP,
 };
 
 pub const SHA1_DIGEST_LEN: usize = 20;
@@ -21,7 +18,6 @@ fn put_header1(buf: &mut [u8], ordinal: u32, total: usize) {
         buf[k] = hdr[k];
         k += 1;
     }
-    {}
 }
 /// 写一个大端 u32 载荷,其余字节不动。
 fn put_be32_at(buf: &mut [u8], off: usize, v: u32) {

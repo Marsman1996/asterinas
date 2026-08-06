@@ -1,4 +1,5 @@
-use crate::{compat::*, cursor::*};
+
+use crate::cursor::*;
 
 pub const TPM_HEADER_LEN: usize = 10;
 /// 无会话响应标签。
@@ -68,7 +69,7 @@ pub fn parse_response(raw: &[u8]) -> Result<Response<'_>, ParseError> {
     if rc != RC_SUCCESS {
         return Err(ParseError::TpmError(rc));
     }
-    let body = slice_subrange(raw, TPM_HEADER_LEN, raw.len());
+    let body = &raw[TPM_HEADER_LEN..raw.len()];
     Ok(Response { tag, rc, body })
 }
 /// 请求头的字节形态。命令载荷由 `cmd` 模块构造，两者拼接即整条请求。

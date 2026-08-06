@@ -1,4 +1,6 @@
-use crate::{cursor::*, tpm1::msg::Parse1Error};
+
+use crate::cursor::*;
+use crate::tpm1::msg::Parse1Error;
 
 /// 随机数一次能取回的上界。器件可以少给,但给多了说明它没遵守请求里的上限,
 /// 按格式错误处理。

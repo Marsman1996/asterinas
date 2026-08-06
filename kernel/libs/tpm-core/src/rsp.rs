@@ -1,4 +1,6 @@
-use crate::{cursor::*, msg::ParseError};
+
+use crate::cursor::*;
+use crate::msg::ParseError;
 
 /// 同时可分配的 PCR bank 数上界。
 pub const MAX_PCR_BANKS: usize = 5;

@@ -1,6 +1,6 @@
-#[cfg(verus_keep_ghost)]
-use crate::cursor::{spec_be16_at, spec_be32_at};
-use crate::{compat::*, crypto::*, cursor::Cursor};
+
+use crate::crypto::*;
+use crate::cursor::Cursor;
 
 const _: () = ();
 /// 标签 2 字节 + 长度 4 字节 + 命令码或返回码 4 字节。
@@ -46,31 +46,32 @@ pub fn auth_hmac<H: HmacSha256Ctx>(
 ) -> [u8; SHA256_LEN] {
     let mut h = H::with_key(key);
     let tail: [u8; 1] = [attrs];
-    h.update(array_as_slice(digest));
-    h.update(array_as_slice(newer));
-    h.update(array_as_slice(older));
-    h.update(array_as_slice(&tail));
-    {}
+    h.update(&digest[..]);
+    h.update(&newer[..]);
+    h.update(&older[..]);
+    h.update(&tail[..]);
     h.finish()
 }
 pub fn rp_hash<S: Sha256Ctx>(rc: u32, ordinal: u32, parms: &[u8]) -> [u8; SHA256_LEN] {
     let mut s = S::new();
     let rc_b = be32_arr(rc);
     let ord_b = be32_arr(ordinal);
-    s.update(array_as_slice(&rc_b));
-    s.update(array_as_slice(&ord_b));
+    s.update(&rc_b[..]);
+    s.update(&ord_b[..]);
     s.update(parms);
-    {}
     s.finish()
 }
 /// `names` 是各授权句柄名字的顺序拼接，由会话层准备。
-pub fn cp_hash<S: Sha256Ctx>(ordinal: u32, names: &[u8], parms: &[u8]) -> [u8; SHA256_LEN] {
+pub fn cp_hash<S: Sha256Ctx>(
+    ordinal: u32,
+    names: &[u8],
+    parms: &[u8],
+) -> [u8; SHA256_LEN] {
     let mut s = S::new();
     let ord_b = be32_arr(ordinal);
-    s.update(array_as_slice(&ord_b));
+    s.update(&ord_b[..]);
     s.update(names);
     s.update(parms);
-    {}
     s.finish()
 }
 /// 在 `out[off..]` 处铺开一个会话，HMAC 字段先留空。
@@ -159,7 +160,11 @@ fn read_nonce(raw: &[u8], off: usize) -> [u8; NONCE_LEN] {
 ///   放行任意值，后面所有偏移就都由对端说了算。
 /// - **长度字段必须与实到字节数相等。** 少一字节意味着解析会读到不属于本
 ///   条响应的数据，多一字节意味着上层截断有误。
-pub fn parse_rsp_auth(raw: &[u8], rhandles: usize, index: usize) -> Result<RspAuth, AuthErr> {
+pub fn parse_rsp_auth(
+    raw: &[u8],
+    rhandles: usize,
+    index: usize,
+) -> Result<RspAuth, AuthErr> {
     if raw.len() < HEADER_LEN {
         return Err(AuthErr::Malformed);
     }
@@ -272,7 +277,6 @@ pub fn ct_eq32(a: &[u8; SHA256_LEN], b: &[u8]) -> bool {
     let mut acc: u8 = 0;
     let mut i: usize = 0;
     while i < SHA256_LEN {
-        {}
         acc = acc | (a[i] ^ b[i]);
         i = i + 1;
     }

@@ -1,22 +1,15 @@
-#[cfg(verus_keep_ghost)]
-use crate::cursor::spec_be32_at;
-use crate::{
-    compat::*,
-    phy::TisPhy,
-    tpm1::{
-        cmd::{
-            CMD_MAX, SHA1_DIGEST_LEN, build_continue_selftest, build_get_random, build_getcap,
-            build_pcr_extend, build_pcr_read, build_save_state, build_startup,
-        },
-        msg::{HEADER_LEN, Parse1Error, RC_SUCCESS, parse_response1},
-        rsp::{
-            parse_cap_u32, parse_cap_u32_quad, parse_cap_u32_triple, parse_get_random,
-            parse_pcr_read,
-        },
-        timeout::{Durations, Timeouts, scale_durations, scale_timeouts},
-    },
-    xfer::{Xfer, XferErr},
+
+use crate::phy::TisPhy;
+use crate::tpm1::cmd::{
+    build_continue_selftest, build_get_random, build_getcap, build_pcr_extend, build_pcr_read,
+    build_save_state, build_startup, CMD_MAX, SHA1_DIGEST_LEN,
 };
+use crate::tpm1::msg::{parse_response1, Parse1Error, HEADER_LEN, RC_SUCCESS};
+use crate::tpm1::rsp::{
+    parse_cap_u32, parse_cap_u32_quad, parse_cap_u32_triple, parse_get_random, parse_pcr_read,
+};
+use crate::tpm1::timeout::{scale_durations, scale_timeouts, Durations, Timeouts};
+use crate::xfer::{Xfer, XferErr};
 
 /// 自检仍在后台进行。轮询遇到它就继续等,不当错误。
 pub const WARN_DOING_SELFTEST: u32 = 0x0000_0802;
@@ -189,7 +182,7 @@ impl<P: TisPhy> Boot1<P> {
             }
             Err(e) => return Err(e),
         };
-        let raw = slice_subrange(array_as_slice(&self.rbuf), 0, n);
+        let raw = &self.rbuf[0..n];
         let rsp = match parse_response1(raw) {
             Ok(v) => v,
             Err(e) => return Err(Boot1Err::Parse(e)),
@@ -209,13 +202,7 @@ impl<P: TisPhy> Boot1<P> {
     pub fn pcr_extend(&mut self, pcr_idx: u32, digest: &[u8]) -> Result<(), Boot1Err> {
         let len = build_pcr_extend(&mut self.cbuf, pcr_idx, digest);
         match self.exec(len) {
-            Ok((_n, rc)) => {
-                if rc == RC_SUCCESS {
-                    Ok(())
-                } else {
-                    Err(Boot1Err::Rc(rc))
-                }
-            }
+            Ok((_n, rc)) => if rc == RC_SUCCESS { Ok(()) } else { Err(Boot1Err::Rc(rc)) }
             Err(e) => Err(e),
         }
     }
@@ -235,7 +222,7 @@ impl<P: TisPhy> Boot1<P> {
             }
             Err(e) => return Err(e),
         };
-        let raw = slice_subrange(array_as_slice(&self.rbuf), 0, n);
+        let raw = &self.rbuf[0..n];
         let rsp = match parse_response1(raw) {
             Ok(v) => v,
             Err(e) => return Err(Boot1Err::Parse(e)),
@@ -264,7 +251,7 @@ impl<P: TisPhy> Boot1<P> {
             }
             Err(e) => return Err(e),
         };
-        let raw = slice_subrange(array_as_slice(&self.rbuf), 0, n);
+        let raw = &self.rbuf[0..n];
         let rsp = match parse_response1(raw) {
             Ok(v) => v,
             Err(e) => return Err(Boot1Err::Parse(e)),
@@ -287,7 +274,7 @@ impl<P: TisPhy> Boot1<P> {
             }
             Err(e) => return Err(e),
         };
-        let raw = slice_subrange(array_as_slice(&self.rbuf), 0, n);
+        let raw = &self.rbuf[0..n];
         let rsp = match parse_response1(raw) {
             Ok(v) => v,
             Err(e) => return Err(Boot1Err::Parse(e)),
@@ -316,7 +303,7 @@ impl<P: TisPhy> Boot1<P> {
             }
             Err(e) => return Err(e),
         };
-        let raw = slice_subrange(array_as_slice(&self.rbuf), 0, n);
+        let raw = &self.rbuf[0..n];
         let rsp = match parse_response1(raw) {
             Ok(v) => v,
             Err(e) => return Err(Boot1Err::Parse(e)),
@@ -349,7 +336,7 @@ impl<P: TisPhy> Boot1<P> {
             }
             Err(e) => return Err(e),
         };
-        let raw = slice_subrange(array_as_slice(&self.rbuf), 0, n);
+        let raw = &self.rbuf[0..n];
         let rsp = match parse_response1(raw) {
             Ok(v) => v,
             Err(e) => return Err(Boot1Err::Parse(e)),
@@ -379,13 +366,7 @@ impl<P: TisPhy> Boot1<P> {
     pub fn save_state(&mut self) -> Result<(), Boot1Err> {
         let len = build_save_state(&mut self.cbuf);
         match self.exec(len) {
-            Ok((_n, rc)) => {
-                if rc == RC_SUCCESS {
-                    Ok(())
-                } else {
-                    Err(Boot1Err::Rc(rc))
-                }
-            }
+            Ok((_n, rc)) => if rc == RC_SUCCESS { Ok(()) } else { Err(Boot1Err::Rc(rc)) }
             Err(e) => Err(e),
         }
     }

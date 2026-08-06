@@ -1,10 +1,9 @@
-use crate::{
-    cmd::{CAP_TPM_PROPERTIES, CC_GET_CAPABILITY},
-    cursor::be32_bytes,
-    msg::{ST_NO_SESSIONS, TPM_HEADER_LEN, build_header},
-    phy::TisPhy,
-    xfer::Xfer,
-};
+
+use crate::cmd::{CAP_TPM_PROPERTIES, CC_GET_CAPABILITY};
+use crate::cursor::be32_bytes;
+use crate::msg::{build_header, ST_NO_SESSIONS, TPM_HEADER_LEN};
+use crate::phy::TisPhy;
+use crate::xfer::Xfer;
 
 /// 器件家族。
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -56,11 +55,7 @@ pub fn probe_family<P: TisPhy>(x: &mut Xfer<P>) -> Family {
     match x.run(&cmd, PROBE_LEN, &mut rsp) {
         Ok((_n, _rc)) => {
             let tag = (rsp[0] as u16) * 256 + (rsp[1] as u16);
-            if tag == ST_NO_SESSIONS {
-                Family::TwoZero
-            } else {
-                Family::OneTwo
-            }
+            if tag == ST_NO_SESSIONS { Family::TwoZero } else { Family::OneTwo }
         }
         Err(_) => Family::OneTwo,
     }

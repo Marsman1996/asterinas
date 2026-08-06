@@ -1,13 +1,10 @@
-use crate::compat::*;
 
 /// 整数 → 大端字节。与 `spec_be16_at` 互为逆运算。
 pub fn be16_bytes(v: u16) -> [u8; 2] {
-    {}
     [(v / 256) as u8, (v % 256) as u8]
 }
 /// 整数 → 大端字节。与 `spec_be32_at` 互为逆运算。
 pub fn be32_bytes(v: u32) -> [u8; 4] {
-    {}
     [
         (v / 16777216) as u8,
         ((v / 65536) % 256) as u8,
@@ -75,7 +72,7 @@ impl Cursor {
         if n <= len && self.pos <= len - n {
             let start = self.pos;
             let end = self.pos + n;
-            let s = slice_subrange(data, start, end);
+            let s = &data[start..end];
             self.pos = end;
             Some(s)
         } else {
@@ -101,7 +98,6 @@ pub fn any_nonzero(s: &[u8]) -> bool {
     let mut i: usize = 0;
     while i < n {
         if s[i] != 0 {
-            {}
             return true;
         }
         i = i + 1;

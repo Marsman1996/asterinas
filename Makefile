@@ -8,6 +8,7 @@ BENCHMARK ?= none
 BOOT_METHOD ?= grub-rescue-iso
 BOOT_PROTOCOL ?= multiboot2
 ENABLE_KVM ?= 1
+ENABLE_TPM ?= 1
 INTEL_TDX ?= 0
 MEM ?= 8G
 OVMF ?= on
@@ -101,6 +102,8 @@ CARGO_OSDK := ~/.cargo/bin/cargo-osdk
 
 # Common arguments for `cargo osdk` `build`, `run` and `test` commands.
 CARGO_OSDK_COMMON_ARGS :=
+QEMU_EXTRA_ARGS :=
+RUN_KERNEL_DEPS :=
 # The build arguments also apply to the `cargo osdk run` command.
 CARGO_OSDK_BUILD_ARGS := --kcmd-args="loglevel=$(LOG_LEVEL)"
 CARGO_OSDK_BUILD_ARGS += --kcmd-args="earlycon"
@@ -202,8 +205,19 @@ endif
 
 ifeq ($(ENABLE_KVM), 1)
 	ifeq ($(TARGET_ARCH), x86_64)
-	CARGO_OSDK_COMMON_ARGS += --qemu-args="-accel kvm"
+	QEMU_EXTRA_ARGS += -accel kvm
 	endif
+endif
+
+ifeq ($(ENABLE_TPM), 1)
+	ifeq ($(TARGET_ARCH), x86_64)
+		QEMU_EXTRA_ARGS += -tpmdev passthrough,id=tpm0,path=/dev/tpm0,cancel-path=/dev/null
+		QEMU_EXTRA_ARGS += -device tpm-tis,tpmdev=tpm0
+	endif
+endif
+
+ifneq ($(strip $(QEMU_EXTRA_ARGS)),)
+CARGO_OSDK_COMMON_ARGS += --qemu-args="$(QEMU_EXTRA_ARGS)"
 endif
 
 # Skip GZIP to make encoding and decoding of initramfs faster
@@ -270,7 +284,7 @@ kernel: initramfs $(CARGO_OSDK)
 
 # Build the kernel with an initramfs and then run it
 .PHONY: run_kernel
-run_kernel: initramfs $(CARGO_OSDK)
+run_kernel: initramfs $(CARGO_OSDK) $(RUN_KERNEL_DEPS)
 	@cd kernel && cargo osdk run $(CARGO_OSDK_BUILD_ARGS)
 # Check the running status of auto tests from the QEMU log
 ifeq ($(AUTO_TEST), conformance)

@@ -1,5 +1,5 @@
 { lib, pkgs, stdenvNoCC, fetchFromGitHub, hostPlatform, writeClosure, busybox
-, benchmark, conformance, regression, dnsServer, }:
+, tpm2Tools, benchmark, conformance, regression, dnsServer, }:
 let
   boot_hello = builtins.path { path = ./../src/boot_hello.sh; };
   init = builtins.path { path = ./../src/init; };
@@ -18,7 +18,7 @@ let
   # Whether the initramfs should include evtest, a common tool to debug input devices (`/dev/input/eventX`)
   is_evtest_included = false;
 
-  all_pkgs = [ busybox etc resolv_conf ]
+  all_pkgs = [ busybox tpm2Tools etc resolv_conf ]
     ++ lib.optionals (benchmark != null) [ benchmark.package ]
     ++ lib.optionals (conformance != null) [ conformance.package ]
     ++ lib.optionals (regression != null) [ regression.package ]
@@ -28,12 +28,14 @@ in stdenvNoCC.mkDerivation {
   buildCommand = ''
     mkdir -p $out/{dev,etc,root,usr,opt,tmp,var,proc,sys}
     mkdir -p $out/{benchmark,test,ext2,exfat}
+    mkdir -p $out/test/tpm2_tools/bin
     mkdir -p $out/usr/{bin,sbin,lib,lib64,local}
     ln -sfn usr/bin $out/bin
     ln -sfn usr/sbin $out/sbin
     ln -sfn usr/lib $out/lib
     ln -sfn usr/lib64 $out/lib64
     cp -r ${busybox}/bin/* $out/bin/
+    cp -r ${tpm2Tools}/bin/* $out/test/tpm2_tools/bin/
     ${lib.optionalString is_evtest_included ''
       cp -r ${pkgs.evtest}/bin/* $out/bin/
     ''}
@@ -73,6 +75,7 @@ in stdenvNoCC.mkDerivation {
     # including the packages themselves.
     # The output of `writeClosure` is equivalent to `nix-store -q --requisites`.
     mkdir -p $out/nix/store
+    cp -r ${tpm2Tools} $out/nix/store/
     pkg_path=${lib.strings.concatStringsSep ":" all_pkgs}
     while IFS= read -r dep_path; do
       if [[ "$pkg_path" == *"$dep_path"* ]]; then

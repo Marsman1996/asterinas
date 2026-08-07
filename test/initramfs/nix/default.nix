@@ -24,6 +24,7 @@ let
 in rec {
   # Packages needed by initramfs
   busybox = pkgs.busybox;
+  tpm2Tools = pkgs.tpm2-tools;
   benchmark = pkgs.callPackage ./benchmark { };
   conformance = pkgs.callPackage ./conformance {
     inherit smp;
@@ -34,7 +35,7 @@ in rec {
     pkgs.callPackage ./regression { testPlatform = regressionTestPlatform; };
 
   initramfs = pkgs.callPackage ./initramfs.nix {
-    inherit busybox;
+    inherit busybox tpm2Tools;
     benchmark = if enableBenchmarkTest then benchmark else null;
     conformance = if enableConformanceTest then conformance else null;
     regression = if enableRegressionTest then regression else null;

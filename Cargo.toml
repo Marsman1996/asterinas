@@ -41,6 +41,7 @@ members = [
     "kernel/comps/softirq",
     "kernel/comps/systree",
     "kernel/comps/time",
+    "kernel/comps/tpm",
     "kernel/comps/uart",
     "kernel/comps/virtio",
     "kernel/libs/aster-bigtcp",
@@ -57,6 +58,7 @@ members = [
     "kernel/libs/logo-ascii-art",
     "kernel/libs/ring-buffer",
     "kernel/libs/sparse-id-alloc",
+    "kernel/libs/tpm-core",
     "kernel/libs/typeflags",
     "kernel/libs/typeflags-util",
     "kernel/libs/xarray",
@@ -89,6 +91,7 @@ default-members = [
     "kernel/comps/softirq",
     "kernel/comps/systree",
     "kernel/comps/time",
+    "kernel/comps/tpm",
     "kernel/comps/uart",
     "kernel/comps/virtio",
     "kernel/libs/aster-bigtcp",
@@ -98,6 +101,7 @@ default-members = [
     "kernel/libs/io-util",
     "kernel/libs/ring-buffer",
     "kernel/libs/sparse-id-alloc",
+    "kernel/libs/tpm-core",
     "kernel/libs/xarray",
 ]
 # All user-space or host-native crates.
@@ -163,6 +167,7 @@ aster-pci = { path = "kernel/comps/pci" }
 aster-softirq = { path = "kernel/comps/softirq" }
 aster-systree = { path = "kernel/comps/systree" }
 aster-time = { path = "kernel/comps/time" }
+aster-tpm = { path = "kernel/comps/tpm" }
 aster-uart = { path = "kernel/comps/uart" }
 aster-virtio = { path = "kernel/comps/virtio" }
 
@@ -181,6 +186,7 @@ keyable-arc = { path = "kernel/libs/keyable-arc" }
 logo-ascii-art = { path = "kernel/libs/logo-ascii-art" }
 ring-buffer = { path = "kernel/libs/ring-buffer" }
 sparse-id-alloc = { path = "kernel/libs/sparse-id-alloc" }
+tpm-core = { path = "kernel/libs/tpm-core" }
 typeflags = { path = "kernel/libs/typeflags" }
 typeflags-util = { path = "kernel/libs/typeflags-util" }
 xarray = { path = "kernel/libs/xarray" }

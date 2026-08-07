@@ -114,7 +114,10 @@ pub fn space_transmit<T: ChipTransport>(
         return Err(XmitErr::Malformed);
     }
     let cc = read_be32(cmd, 6);
-    let attrs = cc_table.lookup(cc).ok_or(XmitErr::Unsupported)?;
+    let attrs = match cc_table.lookup(cc) {
+        Some(a) => a,
+        None => return io.exec_raw(&cmd[..cmd_len], rsp).map_err(XmitErr::Io),
+    };
     if cmd_len < HEADER_SIZE + 4 * attrs.nr_chandles {
         return Err(XmitErr::Malformed);
     }

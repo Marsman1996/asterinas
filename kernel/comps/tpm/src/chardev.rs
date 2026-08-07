@@ -4,7 +4,8 @@
 #![allow(dead_code)]
 
 extern crate alloc;
-use alloc::boxed::Box;
+use alloc::vec;
+use alloc::vec::Vec;
 use spin::Mutex;
 
 use tpm_core::chip::{ChipTransport, CtxIo};
@@ -36,16 +37,17 @@ impl From<XmitErr> for DevErr {
 }
 
 /// 挂起响应暂存区，支持分次 read。
+/// data 用 Vec 堆分配避免内核栈溢出。
 struct Buffer {
-    data: [u8; XFER_BUF],
+    data: Vec<u8>,
     pending: usize,
     read_off: usize,
 }
 
 impl Buffer {
-    const fn new() -> Self {
+    fn new() -> Self {
         Buffer {
-            data: [0u8; XFER_BUF],
+            data: vec![0u8; XFER_BUF],
             pending: 0,
             read_off: 0,
         }
@@ -77,11 +79,11 @@ where
         return Err(DevErr::BadLength);
     }
 
-    let mut cmd = Box::new([0u8; XFER_BUF]);
+    let mut cmd = vec![0u8; XFER_BUF];
     cmd[..input.len()].copy_from_slice(input);
-    let mut rsp = Box::new([0u8; XFER_BUF]);
+    let mut rsp = vec![0u8; XFER_BUF];
 
-    match xmit(&mut *cmd, input.len(), &mut *rsp) {
+    match xmit(&mut cmd, input.len(), &mut rsp) {
         Ok(n) => {
             buf.data[..n].copy_from_slice(&rsp[..n]);
             buf.pending = n;
@@ -160,8 +162,8 @@ pub struct TpmRmFile<'a, T: ChipTransport> {
     chip: &'a Mutex<CtxIo<T>>,
     cc_table: &'a CcTable,
     space: Mutex<Space>,
-    ctx_buf: Mutex<Box<[u8; SPACE_BUF]>>,
-    ses_buf: Mutex<Box<[u8; SPACE_BUF]>>,
+    ctx_buf: Mutex<Vec<u8>>,
+    ses_buf: Mutex<Vec<u8>>,
     buf: Mutex<Buffer>,
 }
 
@@ -172,8 +174,8 @@ impl<'a, T: ChipTransport> TpmRmFile<'a, T> {
             chip,
             cc_table,
             space: Mutex::new(Space::new()),
-            ctx_buf: Mutex::new(Box::new([0u8; SPACE_BUF])),
-            ses_buf: Mutex::new(Box::new([0u8; SPACE_BUF])),
+            ctx_buf: Mutex::new(vec![0u8; SPACE_BUF]),
+            ses_buf: Mutex::new(vec![0u8; SPACE_BUF]),
             buf: Mutex::new(Buffer::new()),
         }
     }
@@ -189,8 +191,8 @@ impl<'a, T: ChipTransport> TpmRmFile<'a, T> {
                 &mut space,
                 &mut *chip,
                 self.cc_table,
-                &mut **ctx_buf,
-                &mut **ses_buf,
+                &mut *ctx_buf,
+                &mut *ses_buf,
                 cmd,
                 len,
                 rsp,

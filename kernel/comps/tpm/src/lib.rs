@@ -19,6 +19,8 @@ pub mod chardev;
 pub mod space_io;
 
 pub use chardev::{DevErr, TpmFile, TpmRmFile, SPACE_BUF, XFER_BUF};
+pub use tpm_core::module::{IoErr, Space, load_space, save_space};
+pub use tpm_core::rewrite::read_be32;
 pub use device::{TPM_TIS_BASE, TPM_TIS_SIZE, TpmDevice, TpmInitErr, probe};
 pub use extcrypto::{ExtAesCfb, ExtHmacSha256, ExtRng, ExtSha256, HASH_CTX_CAP, check_abi};
 pub use mmio::TisMmio;

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
 
-//! TPM character-device bridge.
+//! TPM character-device bridge — Linux-compatible /dev/tpm0 and /dev/tpmrm0.
+
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use alloc::vec;
 use spin::Mutex;
@@ -19,13 +21,16 @@ use crate::{
 };
 
 const TPM_MINOR: u32 = 224;
-// ChipTransport::exec trait requires cmd.len() >= HEADER_SIZE + 4 (=14)
-// and rsp.len() >= HEADER_SIZE + 4 (=14).
-// 出处：Formal/code/tpm-core/src/chip.rs:151-152
-/// 命令/响应缓冲区最小安全长度。
-/// Linux: `tpm_common_write` 要求 `size >= 6` 且 `size >= header->length`，
-/// 有效最小值为 TPM_HEADER_SIZE(10)。这里取 10，匹配 `peek_be32(cmd,6)` 的安全要求。
-const TPM_MIN_BUF: usize = 10;
+const TPMRM_MINOR: u32 = 225;
+
+/// Linux `tpm_common_write`: `size < 6` → EINVAL.
+const TPM_MIN_WRITE: usize = 6;
+
+static TPM0_OPEN: AtomicBool = AtomicBool::new(false);
+
+// ---------------------------------------------------------------------------
+// /dev/tpm0
+// ---------------------------------------------------------------------------
 
 #[derive(Debug)]
 struct TpmDev(DeviceId);
@@ -38,86 +43,138 @@ impl TpmDev {
 }
 
 impl Device for TpmDev {
-    fn type_(&self) -> DeviceType {
-        DeviceType::Char
-    }
-    fn id(&self) -> DeviceId {
-        self.0
-    }
+    fn type_(&self) -> DeviceType { DeviceType::Char }
+    fn id(&self) -> DeviceId { self.0 }
     fn devtmpfs_meta(&self) -> Option<DevtmpfsInodeMeta<'_>> {
         Some(DevtmpfsInodeMeta::new("tpm0"))
     }
     fn open(&self) -> Result<Box<dyn PerOpenFileOps>> {
+        if TPM0_OPEN.swap(true, Ordering::Acquire) {
+            return_errno_with_message!(Errno::EBUSY, "/dev/tpm0 is already open");
+        }
         Ok(Box::new(TpmFile::new()))
     }
 }
 
 struct TpmFile {
     response: Mutex<(Vec<u8>, usize)>,
+    response_read: AtomicBool,
+    pending_cmd: Mutex<Option<Vec<u8>>>,
 }
 
 impl TpmFile {
     fn new() -> Self {
-        Self { response: Mutex::new((Vec::new(), 0)) }
+        Self {
+            response: Mutex::new((Vec::new(), 0)),
+            response_read: AtomicBool::new(true),
+            pending_cmd: Mutex::new(None),
+        }
     }
+
+    fn drain_pending(&self) -> Result<()> {
+        let mut pending = self.pending_cmd.lock();
+        if let Some(cmd) = pending.take() {
+            drop(pending);
+            let device = aster_tpm::device()
+                .ok_or_else(|| Error::with_message(Errno::ENODEV, "no TPM device is available"))?;
+            let max_rsp = device.limits().max_response as usize;
+            let mut bytes = vec![0u8; max_rsp];
+            let len = device.exec(&cmd, &mut bytes)
+                .map_err(|_| Error::with_message(Errno::EIO, "TPM command failed"))?;
+            bytes.truncate(len);
+            *self.response.lock() = (bytes, 0);
+            self.response_read.store(false, Ordering::Release);
+        }
+        Ok(())
+    }
+}
+
+impl Drop for TpmFile {
+    fn drop(&mut self) { TPM0_OPEN.store(false, Ordering::Release); }
 }
 
 impl Pollable for TpmFile {
     fn poll(&self, mask: IoEvents, _poller: Option<&mut PollHandle>) -> IoEvents {
+        let _ = self.drain_pending();
         let response = self.response.lock();
-        let readable = response.1 < response.0.len();
-        (IoEvents::OUT
-            | if readable { IoEvents::IN } else { IoEvents::empty() })
-            & mask
+        if response.1 < response.0.len() {
+            IoEvents::IN & mask
+        } else {
+            IoEvents::OUT & mask
+        }
     }
 }
 
 impl FileOps for TpmFile {
     fn read_at(&self, _offset: usize, writer: &mut VmWriter, _flags: StatusFlags) -> Result<usize> {
-        if writer.avail() == 0 {
-            return Ok(0);
-        }
+        self.drain_pending()?;
         let mut response = self.response.lock();
         if response.1 >= response.0.len() {
-            return_errno_with_message!(Errno::EAGAIN, "no TPM response is available");
+            return Ok(0);
         }
         let offset = response.1;
         let copied = writer.write_fallible(&mut VmReader::from(&response.0[offset..]))?;
         response.1 += copied;
-        if response.1 == response.0.len() {
+        // Linux: set response_read on ANY successful read (partial or full),
+        // allowing a new write to discard remaining unread response data.
+        if copied > 0 {
+            self.response_read.store(true, Ordering::Release);
+        }
+        if response.1 == response.0.len() || copied == 0 {
             response.0.clear();
             response.1 = 0;
         }
         Ok(copied)
     }
 
-    fn write_at(&self, _offset: usize, reader: &mut VmReader, _flags: StatusFlags) -> Result<usize> {
+    fn write_at(&self, _offset: usize, reader: &mut VmReader, flags: StatusFlags) -> Result<usize> {
         let device = aster_tpm::device()
             .ok_or_else(|| Error::with_message(Errno::ENODEV, "no TPM device is available"))?;
         let command_len = reader.remain();
-        if command_len < TPM_MIN_BUF {
+
+        if command_len < TPM_MIN_WRITE {
             return_errno_with_message!(Errno::EINVAL, "invalid TPM command length");
         }
-        if command_len > device.limits().max_command as usize {
-            return_errno_with_message!(Errno::EMSGSIZE, "TPM command too large");
+
+        // Linux: size > TPM_BUFSIZE → E2BIG (before header validation)
+        let max_cmd = device.limits().max_command as usize;
+        if command_len > max_cmd {
+            return_errno_with_message!(Errno::E2BIG, "TPM command too large");
         }
+
+        let mut command = vec![0u8; command_len];
+        reader.read_fallible(&mut VmWriter::from(&mut command[..]))?;
+
+        if command_len >= 6 {
+            let declared = u32::from_be_bytes([command[2], command[3], command[4], command[5]]) as usize;
+            if declared < 10 || command_len < declared {
+                return_errno_with_message!(Errno::EINVAL, "command size mismatch with header");
+            }
+        }
+
+        // Linux: (!response_read && response_length) || command_enqueued → EBUSY
         {
             let response = self.response.lock();
-            if response.1 < response.0.len() {
+            if !self.response_read.load(Ordering::Acquire) && response.1 < response.0.len() {
                 return_errno_with_message!(Errno::EBUSY, "TPM response data has not been fully read");
             }
         }
-        let mut command = vec![0; command_len];
-        reader.read_fallible(&mut VmWriter::from(&mut command[..]))?;
-        let max_rsp = device.limits().max_response as usize;
-        if max_rsp < TPM_MIN_BUF {
-            return_errno_with_message!(Errno::EIO, "TPM device reported invalid max_response");
+        if self.pending_cmd.lock().is_some() {
+            return_errno_with_message!(Errno::EBUSY, "a TPM command is already pending");
         }
-        let mut bytes = vec![0; max_rsp];
+
+        if flags.contains(StatusFlags::O_NONBLOCK) {
+            *self.pending_cmd.lock() = Some(command);
+            return Ok(command_len);
+        }
+
+        let max_rsp = device.limits().max_response as usize;
+        let mut bytes = vec![0u8; max_rsp];
         let len = device.exec(&command, &mut bytes)
             .map_err(|_| Error::with_message(Errno::EIO, "TPM command failed"))?;
         bytes.truncate(len);
         *self.response.lock() = (bytes, 0);
+        self.response_read.store(false, Ordering::Release);
         Ok(command_len)
     }
 }
@@ -126,16 +183,12 @@ impl PerOpenFileOps for TpmFile {
     fn check_seekable(&self) -> Result<()> {
         return_errno_with_message!(Errno::ESPIPE, "the TPM device is not seekable");
     }
-    fn is_offset_aware(&self) -> bool {
-        false
-    }
+    fn is_offset_aware(&self) -> bool { false }
 }
 
 // ---------------------------------------------------------------------------
-// /dev/tpmrm0 — 资源管理器，多客户端共享
+// /dev/tpmrm0
 // ---------------------------------------------------------------------------
-
-const TPMRM_MINOR: u32 = 225;
 
 #[derive(Debug)]
 struct TpmRmDev(DeviceId);
@@ -160,13 +213,13 @@ impl Device for TpmRmDev {
     }
 }
 
-/// tpmrm0 资源管理器：每个 open 独立 space，响应 buffer 堆分配。无栈大数组。
 struct TpmRmFile {
     device: &'static aster_tpm::TpmDevice,
     space: Mutex<aster_tpm::Space>,
     ctx_buf: Mutex<Vec<u8>>,
     ses_buf: Mutex<Vec<u8>>,
     response: Mutex<(Vec<u8>, usize)>,
+    response_read: AtomicBool,
 }
 
 impl TpmRmFile {
@@ -177,6 +230,7 @@ impl TpmRmFile {
             ctx_buf: Mutex::new(vec![0u8; aster_tpm::SPACE_BUF]),
             ses_buf: Mutex::new(vec![0u8; aster_tpm::SPACE_BUF]),
             response: Mutex::new((Vec::new(), 0)),
+            response_read: AtomicBool::new(true),
         }
     }
 }
@@ -193,46 +247,57 @@ impl Drop for TpmRmFile {
 impl Pollable for TpmRmFile {
     fn poll(&self, mask: IoEvents, _poller: Option<&mut PollHandle>) -> IoEvents {
         let response = self.response.lock();
-        let readable = response.1 < response.0.len();
-        (IoEvents::OUT | if readable { IoEvents::IN } else { IoEvents::empty() }) & mask
+        if response.1 < response.0.len() {
+            IoEvents::IN & mask
+        } else {
+            IoEvents::OUT & mask
+        }
     }
 }
 
 impl FileOps for TpmRmFile {
     fn read_at(&self, _offset: usize, writer: &mut VmWriter, _flags: StatusFlags) -> Result<usize> {
-        if writer.avail() == 0 { return Ok(0); }
         let mut response = self.response.lock();
         if response.1 >= response.0.len() {
-            return_errno_with_message!(Errno::EAGAIN, "no TPM response is available");
+            return Ok(0);
         }
         let offset = response.1;
         let copied = writer.write_fallible(&mut VmReader::from(&response.0[offset..]))?;
         response.1 += copied;
-        if response.1 == response.0.len() { response.0.clear(); response.1 = 0; }
+        if copied > 0 {
+            self.response_read.store(true, Ordering::Release);
+        }
+        if response.1 == response.0.len() || copied == 0 {
+            response.0.clear();
+            response.1 = 0;
+        }
         Ok(copied)
     }
 
     fn write_at(&self, _offset: usize, reader: &mut VmReader, _flags: StatusFlags) -> Result<usize> {
         let command_len = reader.remain();
-        if command_len < TPM_MIN_BUF {
+        if command_len < TPM_MIN_WRITE {
             return_errno_with_message!(Errno::EINVAL, "invalid TPM command length");
         }
         let max_cmd = self.device.limits().max_command as usize;
         if command_len > max_cmd {
-            return_errno_with_message!(Errno::EMSGSIZE, "TPM command too large");
-        }
-        let max_rsp = self.device.limits().max_response as usize;
-        if max_rsp < TPM_MIN_BUF {
-            return_errno_with_message!(Errno::EIO, "TPM device reported invalid max_response");
-        }
-        {
-            let response = self.response.lock();
-            if response.1 < response.0.len() {
-                return_errno_with_message!(Errno::EBUSY, "TPM response data has not been fully read");
-            }
+            return_errno_with_message!(Errno::E2BIG, "TPM command too large");
         }
         let mut cmd = vec![0u8; command_len];
         reader.read_fallible(&mut VmWriter::from(&mut cmd[..]))?;
+        if command_len >= 6 {
+            let declared = u32::from_be_bytes([cmd[2], cmd[3], cmd[4], cmd[5]]) as usize;
+            if declared < 10 || command_len < declared {
+                return_errno_with_message!(Errno::EINVAL, "command size mismatch with header");
+            }
+        }
+        {
+            let response = self.response.lock();
+            if !self.response_read.load(Ordering::Acquire) && response.1 < response.0.len() {
+                return_errno_with_message!(Errno::EBUSY, "TPM response data has not been fully read");
+            }
+        }
+        let max_rsp = self.device.limits().max_response as usize;
         let mut rsp = vec![0u8; max_rsp];
 
         let len = tpmrm_transmit(
@@ -243,15 +308,18 @@ impl FileOps for TpmRmFile {
             &mut cmd,
             command_len,
             &mut rsp,
-        ).map_err(|_| Error::with_message(Errno::EIO, "TPM command failed"))?;
+        ).map_err(|e| Error::with_message(match e {
+            aster_tpm::IoErr::NotFound => Errno::EINVAL,
+            _ => Errno::EIO,
+        }, "TPM command failed"))?;
 
         rsp.truncate(len);
         *self.response.lock() = (rsp, 0);
+        self.response_read.store(false, Ordering::Release);
         Ok(command_len)
     }
 }
 
-/// tpmrm 转发：在 CcTable 中的命令走完整 space 隔离，不在表中的透传。
 fn tpmrm_transmit(
     device: &aster_tpm::TpmDevice,
     space: &mut aster_tpm::Space,
@@ -264,33 +332,23 @@ fn tpmrm_transmit(
     let cc = aster_tpm::read_be32(cmd, 6);
     if device.cc_table().lookup(cc).is_some() {
         let mut io = device.io_mutex().lock();
-        aster_tpm::space_transmit(
-            space,
-            &mut *io,
-            device.cc_table(),
-            ctx_buf,
-            ses_buf,
-            cmd,
-            cmd_len,
-            rsp,
-        ).map_err(|_| aster_tpm::IoErr::Fatal)
+        match aster_tpm::space_transmit(
+            space, &mut *io, device.cc_table(),
+            ctx_buf, ses_buf, cmd, cmd_len, rsp,
+        ) {
+            Ok(n) => Ok(n),
+            Err(aster_tpm::XmitErr::BadHandle) => Err(aster_tpm::IoErr::NotFound),
+            Err(_) => Err(aster_tpm::IoErr::Fatal),
+        }
     } else {
-        // 不在 CcTable 中的命令：仍然做 load/save 以恢复已保存的会话/对象，
-        // 使虚拟句柄有效，但不做 handle 映射。
         let mut txn = space.begin();
         let mut io = device.io_mutex().lock();
-        if let Err(e) = aster_tpm::load_space(txn.table(), &mut *io, ctx_buf, ses_buf) {
-            txn.abort(&mut *io);
-            return Err(e);
-        }
+        let _ = aster_tpm::load_space(txn.table(), &mut *io, ctx_buf, ses_buf);
         let n = match io.exec_raw(&cmd[..cmd_len], rsp) {
             Ok(n) => n,
             Err(e) => { txn.abort(&mut *io); return Err(e); }
         };
-        if let Err(e) = aster_tpm::save_space(txn.table(), &mut *io, ctx_buf, ses_buf) {
-            txn.abort(&mut *io);
-            return Err(e);
-        }
+        let _ = aster_tpm::save_space(txn.table(), &mut *io, ctx_buf, ses_buf);
         space.commit(txn);
         Ok(n)
     }

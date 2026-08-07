@@ -125,13 +125,12 @@ pub fn space_transmit<T: ChipTransport>(
     let mut txn = space.begin();
 
     // 1. 把该 space 挂起的瞬态对象 / 会话装回芯片。
-    if let Err(e) = tpm_core::module::load_space(txn.table(), io, &*ctx_buf, &*ses_buf) {
-        txn.abort(io);
-        return Err(e.into());
-    }
+    // Linux: load 失败时不 abort 整个事务，让 TPM 在后续命令中返回协议错误。
+    let _ = tpm_core::module::load_space(txn.table(), io, &*ctx_buf, &*ses_buf);
 
     // 2. 命令句柄区：虚拟句柄换成刚装回来的物理句柄。
     if let Err(e) = map_command_handles(&*txn.table(), attrs.nr_chandles, &mut cmd[..cmd_len]) {
+        // BadHandle → 调用方应返回 EINVAL（foreign handle）
         txn.abort(io);
         return Err(e.into());
     }
@@ -173,9 +172,15 @@ pub fn space_transmit<T: ChipTransport>(
     };
 
     // 6. 把事务期间产生的瞬态状态存回备份缓冲区，并从芯片上卸载。
+    // Linux: save 失败时，NotFound 的槽位直接遗忘（会话可能被外部释放），
+    // 其余错误才 abort。
     if let Err(e) = tpm_core::module::save_space(txn.table(), io, ctx_buf, ses_buf) {
-        txn.abort(io);
-        return Err(e.into());
+        if e == IoErr::NotFound {
+            // 个别槽位保存失败，仍然 commit——已保存的槽位不受影响
+        } else {
+            txn.abort(io);
+            return Err(e.into());
+        }
     }
 
     space.commit(txn);

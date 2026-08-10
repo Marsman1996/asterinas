@@ -7,11 +7,13 @@
 
 #![allow(dead_code)]
 
-use tpm_core::chip::{ChipTransport, CtxIo};
-use tpm_core::module::{ContextIo, IoErr, Space};
-use tpm_core::rewrite::{
-    map_capability_handles, map_command_handles, map_response_handle, read_be32, HeaderOutcome,
-    SpaceErr, HEADER_SIZE,
+use tpm_core::{
+    chip::{ChipTransport, CtxIo},
+    module::{ContextIo, IoErr, Space},
+    rewrite::{
+        HEADER_SIZE, HeaderOutcome, SpaceErr, map_capability_handles, map_command_handles,
+        map_response_handle, read_be32,
+    },
 };
 
 /// GetCapability 的命令码——响应体里的句柄列表要按 space 过滤。
@@ -27,6 +29,9 @@ pub struct CcAttrs {
 
 /// 命令属性表容量上限。
 pub const MAX_COMMANDS: usize = 256;
+
+/// Per-open resource-space backing capacity for object and session contexts.
+pub const SPACE_BUF: usize = 16384;
 
 /// 命令码 -> 属性的定长查找表。引导期一次性填好，此后只读。
 pub struct CcTable {
@@ -59,7 +64,13 @@ impl CcTable {
     }
 
     pub fn lookup(&self, cc: u32) -> Option<CcAttrs> {
-        (0..self.len).find(|&i| self.cc[i] == cc).map(|i| self.attrs[i])
+        (0..self.len)
+            .find(|&i| self.cc[i] == cc)
+            .map(|i| self.attrs[i])
+    }
+
+    pub fn len(&self) -> usize {
+        self.len
     }
 }
 
@@ -114,10 +125,7 @@ pub fn space_transmit<T: ChipTransport>(
         return Err(XmitErr::Malformed);
     }
     let cc = read_be32(cmd, 6);
-    let attrs = match cc_table.lookup(cc) {
-        Some(a) => a,
-        None => return io.exec_raw(&cmd[..cmd_len], rsp).map_err(XmitErr::Io),
-    };
+    let attrs = cc_table.lookup(cc).ok_or(XmitErr::Unsupported)?;
     if cmd_len < HEADER_SIZE + 4 * attrs.nr_chandles {
         return Err(XmitErr::Malformed);
     }
@@ -125,8 +133,10 @@ pub fn space_transmit<T: ChipTransport>(
     let mut txn = space.begin();
 
     // 1. 把该 space 挂起的瞬态对象 / 会话装回芯片。
-    // Linux: load 失败时不 abort 整个事务，让 TPM 在后续命令中返回协议错误。
-    let _ = tpm_core::module::load_space(txn.table(), io, &*ctx_buf, &*ses_buf);
+    if let Err(e) = tpm_core::module::load_space(txn.table(), io, &*ctx_buf, &*ses_buf) {
+        txn.abort(io);
+        return Err(e.into());
+    }
 
     // 2. 命令句柄区：虚拟句柄换成刚装回来的物理句柄。
     if let Err(e) = map_command_handles(&*txn.table(), attrs.nr_chandles, &mut cmd[..cmd_len]) {
@@ -155,8 +165,10 @@ pub fn space_transmit<T: ChipTransport>(
     // 4. 响应头部句柄：新分配的物理句柄登记 / 虚拟化。
     let outcome = map_response_handle(txn.table(), attrs.has_rhandle, &mut rsp[..n]);
     if let HeaderOutcome::OutOfSlots { flush } = outcome {
-        // flush 失败无可补救，且 flush 语义是幂等释放意图。
-        let _ = io.flush(flush);
+        // Match Linux tpm2_commit_space(): flush the untracked new handle,
+        // discard the loaded work space, and leave the persistent table and
+        // context buffers untouched.
+        io.flush(flush);
         txn.abort(io);
         return Err(XmitErr::NoSlots);
     }
@@ -172,15 +184,9 @@ pub fn space_transmit<T: ChipTransport>(
     };
 
     // 6. 把事务期间产生的瞬态状态存回备份缓冲区，并从芯片上卸载。
-    // Linux: save 失败时，NotFound 的槽位直接遗忘（会话可能被外部释放），
-    // 其余错误才 abort。
     if let Err(e) = tpm_core::module::save_space(txn.table(), io, ctx_buf, ses_buf) {
-        if e == IoErr::NotFound {
-            // 个别槽位保存失败，仍然 commit——已保存的槽位不受影响
-        } else {
-            txn.abort(io);
-            return Err(e.into());
-        }
+        txn.abort(io);
+        return Err(e.into());
     }
 
     space.commit(txn);

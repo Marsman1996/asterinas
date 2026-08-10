@@ -32,11 +32,10 @@ FN_TEST(tpmrm_allows_multiple_independent_opens)
 }
 END_TEST()
 
-FN_TEST(tpmrm_cc_table_accepts_known_and_synthesizes_unknown_error)
+FN_TEST(tpmrm_cc_table_accepts_known_and_rejects_unknown_commands)
 {
 	uint8_t response[256] = { 0 };
 	ssize_t len;
-	uint32_t rc;
 	int fd = TEST_SUCC(open(TPMRM_DEVICE, O_RDWR));
 
 	/* A known command must be accepted through the RM. */
@@ -50,10 +49,7 @@ FN_TEST(tpmrm_cc_table_accepts_known_and_synthesizes_unknown_error)
 	if (len >= TPM_HEADER_SIZE + 2)
 		TEST_RES(tpm_read_be32(response + 6), _ret == 0);
 
-	/*
-	 * Linux RM rejects an unknown command code before TPM execution and
-	 * synthesizes a 10-byte resource-manager-layer TPM error response.
-	 */
+	/* Linux synthesizes a resource-manager-layer TPM command-code response. */
 	memset(response, 0, sizeof(response));
 	len = TEST_RES(tpm_transact_sync(
 			       fd,
@@ -62,12 +58,9 @@ FN_TEST(tpmrm_cc_table_accepts_known_and_synthesizes_unknown_error)
 			       response,
 			       sizeof(response)),
 		       _ret == TPM_HEADER_SIZE);
-
-	if (len == TPM_HEADER_SIZE) {
-		rc = tpm_read_be32(response + 6);
-		TEST_RES(rc, _ret != 0);
-		TEST_RES(rc & 0xffffU, _ret == TPM2_RC_COMMAND_CODE);
-	}
+	if (len == TPM_HEADER_SIZE)
+		TEST_RES(tpm_read_be32(response + 6),
+			 _ret == (TPM2_RC_COMMAND_CODE | TSS2_RESMGR_TPM_RC_LAYER));
 
 	TEST_SUCC(close(fd));
 }

@@ -2,15 +2,14 @@
 
 //! TPM character-device bridge — Linux-compatible /dev/tpm0 and /dev/tpmrm0.
 
+use alloc::vec;
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use alloc::vec;
+use device_id::{DeviceId, MinorId};
 use spin::Mutex;
 
-use device_id::{DeviceId, MinorId};
-
 use crate::{
-    device::{registry::char, Device, DeviceType, DevtmpfsInodeMeta},
+    device::{Device, DeviceType, DevtmpfsInodeMeta, registry::char},
     events::IoEvents,
     fs::{
         file::{PerOpenFileOps, StatusFlags},
@@ -25,6 +24,12 @@ const TPMRM_MINOR: u32 = 225;
 
 /// Linux `tpm_common_write`: `size < 6` → EINVAL.
 const TPM_MIN_WRITE: usize = 6;
+const TPM_HEADER_SIZE: usize = 10;
+const TPM2_RC_SIZE_RESPONSE: [u8; TPM_HEADER_SIZE] = [
+    0x80, 0x01, // TPM2_ST_NO_SESSIONS
+    0x00, 0x00, 0x00, 0x0a, // response size
+    0x00, 0x00, 0x00, 0x95, // TPM2_RC_SIZE
+];
 
 static TPM0_OPEN: AtomicBool = AtomicBool::new(false);
 
@@ -43,8 +48,12 @@ impl TpmDev {
 }
 
 impl Device for TpmDev {
-    fn type_(&self) -> DeviceType { DeviceType::Char }
-    fn id(&self) -> DeviceId { self.0 }
+    fn type_(&self) -> DeviceType {
+        DeviceType::Char
+    }
+    fn id(&self) -> DeviceId {
+        self.0
+    }
     fn devtmpfs_meta(&self) -> Option<DevtmpfsInodeMeta<'_>> {
         Some(DevtmpfsInodeMeta::new("tpm0"))
     }
@@ -75,11 +84,22 @@ impl TpmFile {
         let mut pending = self.pending_cmd.lock();
         if let Some(cmd) = pending.take() {
             drop(pending);
+            // Linux accepts writes as short as the six-byte common header and
+            // lets the TPM reject an incomplete TPM2 header. The verified
+            // transport requires all ten header bytes before it may inspect
+            // the command code, so reproduce that observable TPM response at
+            // this adapter boundary instead of violating its precondition.
+            if cmd.len() < TPM_HEADER_SIZE {
+                *self.response.lock() = (TPM2_RC_SIZE_RESPONSE.to_vec(), 0);
+                self.response_read.store(false, Ordering::Release);
+                return Ok(());
+            }
             let device = aster_tpm::device()
                 .ok_or_else(|| Error::with_message(Errno::ENODEV, "no TPM device is available"))?;
             let max_rsp = device.limits().max_response as usize;
             let mut bytes = vec![0u8; max_rsp];
-            let len = device.exec(&cmd, &mut bytes)
+            let len = device
+                .exec(&cmd, &mut bytes)
                 .map_err(|_| Error::with_message(Errno::EIO, "TPM command failed"))?;
             bytes.truncate(len);
             *self.response.lock() = (bytes, 0);
@@ -90,7 +110,9 @@ impl TpmFile {
 }
 
 impl Drop for TpmFile {
-    fn drop(&mut self) { TPM0_OPEN.store(false, Ordering::Release); }
+    fn drop(&mut self) {
+        TPM0_OPEN.store(false, Ordering::Release);
+    }
 }
 
 impl Pollable for TpmFile {
@@ -146,8 +168,9 @@ impl FileOps for TpmFile {
         reader.read_fallible(&mut VmWriter::from(&mut command[..]))?;
 
         if command_len >= 6 {
-            let declared = u32::from_be_bytes([command[2], command[3], command[4], command[5]]) as usize;
-            if declared < 10 || command_len < declared {
+            let declared =
+                u32::from_be_bytes([command[2], command[3], command[4], command[5]]) as usize;
+            if command_len < declared {
                 return_errno_with_message!(Errno::EINVAL, "command size mismatch with header");
             }
         }
@@ -156,7 +179,10 @@ impl FileOps for TpmFile {
         {
             let response = self.response.lock();
             if !self.response_read.load(Ordering::Acquire) && response.1 < response.0.len() {
-                return_errno_with_message!(Errno::EBUSY, "TPM response data has not been fully read");
+                return_errno_with_message!(
+                    Errno::EBUSY,
+                    "TPM response data has not been fully read"
+                );
             }
         }
         if self.pending_cmd.lock().is_some() {
@@ -168,9 +194,16 @@ impl FileOps for TpmFile {
             return Ok(command_len);
         }
 
+        if command_len < TPM_HEADER_SIZE {
+            *self.response.lock() = (TPM2_RC_SIZE_RESPONSE.to_vec(), 0);
+            self.response_read.store(false, Ordering::Release);
+            return Ok(command_len);
+        }
+
         let max_rsp = device.limits().max_response as usize;
         let mut bytes = vec![0u8; max_rsp];
-        let len = device.exec(&command, &mut bytes)
+        let len = device
+            .exec(&command, &mut bytes)
             .map_err(|_| Error::with_message(Errno::EIO, "TPM command failed"))?;
         bytes.truncate(len);
         *self.response.lock() = (bytes, 0);
@@ -183,7 +216,9 @@ impl PerOpenFileOps for TpmFile {
     fn check_seekable(&self) -> Result<()> {
         return_errno_with_message!(Errno::ESPIPE, "the TPM device is not seekable");
     }
-    fn is_offset_aware(&self) -> bool { false }
+    fn is_offset_aware(&self) -> bool {
+        false
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -201,8 +236,12 @@ impl TpmRmDev {
 }
 
 impl Device for TpmRmDev {
-    fn type_(&self) -> DeviceType { DeviceType::Char }
-    fn id(&self) -> DeviceId { self.0 }
+    fn type_(&self) -> DeviceType {
+        DeviceType::Char
+    }
+    fn id(&self) -> DeviceId {
+        self.0
+    }
     fn devtmpfs_meta(&self) -> Option<DevtmpfsInodeMeta<'_>> {
         Some(DevtmpfsInodeMeta::new("tpmrm0"))
     }
@@ -238,9 +277,7 @@ impl TpmRmFile {
 impl Drop for TpmRmFile {
     fn drop(&mut self) {
         let mut space = self.space.lock();
-        let mut io = self.device.io_mutex().lock();
-        let txn = space.begin();
-        txn.abort(&mut *io);
+        self.device.close_space(&mut *space);
     }
 }
 
@@ -274,7 +311,12 @@ impl FileOps for TpmRmFile {
         Ok(copied)
     }
 
-    fn write_at(&self, _offset: usize, reader: &mut VmReader, _flags: StatusFlags) -> Result<usize> {
+    fn write_at(
+        &self,
+        _offset: usize,
+        reader: &mut VmReader,
+        _flags: StatusFlags,
+    ) -> Result<usize> {
         let command_len = reader.remain();
         if command_len < TPM_MIN_WRITE {
             return_errno_with_message!(Errno::EINVAL, "invalid TPM command length");
@@ -287,32 +329,56 @@ impl FileOps for TpmRmFile {
         reader.read_fallible(&mut VmWriter::from(&mut cmd[..]))?;
         if command_len >= 6 {
             let declared = u32::from_be_bytes([cmd[2], cmd[3], cmd[4], cmd[5]]) as usize;
-            if declared < 10 || command_len < declared {
+            if command_len < declared {
                 return_errno_with_message!(Errno::EINVAL, "command size mismatch with header");
             }
         }
         {
             let response = self.response.lock();
             if !self.response_read.load(Ordering::Acquire) && response.1 < response.0.len() {
-                return_errno_with_message!(Errno::EBUSY, "TPM response data has not been fully read");
+                return_errno_with_message!(
+                    Errno::EBUSY,
+                    "TPM response data has not been fully read"
+                );
             }
         }
         let max_rsp = self.device.limits().max_response as usize;
         let mut rsp = vec![0u8; max_rsp];
 
-        let len = tpmrm_transmit(
-            self.device,
-            &mut *self.space.lock(),
-            &mut *self.ctx_buf.lock(),
-            &mut *self.ses_buf.lock(),
+        let mut space = self.space.lock();
+        let mut ctx_buf = self.ctx_buf.lock();
+        let mut ses_buf = self.ses_buf.lock();
+        let result = self.device.transmit_space(
+            &mut *space,
+            &mut *ctx_buf,
+            &mut *ses_buf,
             &mut cmd,
             command_len,
             &mut rsp,
-        ).map_err(|e| Error::with_message(match e {
-            aster_tpm::IoErr::NotFound => Errno::EINVAL,
-            _ => Errno::EIO,
-        }, "TPM command failed"))?;
-
+        );
+        let len = match result {
+            Ok(len) => len,
+            Err(aster_tpm::XmitErr::Unsupported) => {
+                // Linux tpm_dev_transmit() turns an unsupported command into
+                // a resource-manager-layer TPM2_RC_COMMAND_CODE response.
+                rsp[..10]
+                    .copy_from_slice(&[0x80, 0x01, 0x00, 0x00, 0x00, 0x0a, 0x00, 0x0b, 0x01, 0x43]);
+                10
+            }
+            Err(error) => {
+                let errno = match error {
+                    aster_tpm::XmitErr::Malformed | aster_tpm::XmitErr::BadHandle => Errno::EINVAL,
+                    aster_tpm::XmitErr::Unsupported => unreachable!(),
+                    aster_tpm::XmitErr::NoSlots
+                    | aster_tpm::XmitErr::Io(aster_tpm::IoErr::NoSpace) => Errno::ENOMEM,
+                    aster_tpm::XmitErr::Io(_) => Errno::EIO,
+                };
+                return Err(Error::with_message(
+                    errno,
+                    "TPM resource-manager command failed",
+                ));
+            }
+        };
         rsp.truncate(len);
         *self.response.lock() = (rsp, 0);
         self.response_read.store(false, Ordering::Release);
@@ -320,45 +386,13 @@ impl FileOps for TpmRmFile {
     }
 }
 
-fn tpmrm_transmit(
-    device: &aster_tpm::TpmDevice,
-    space: &mut aster_tpm::Space,
-    ctx_buf: &mut [u8],
-    ses_buf: &mut [u8],
-    cmd: &mut [u8],
-    cmd_len: usize,
-    rsp: &mut [u8],
-) -> Result<usize, aster_tpm::IoErr> {
-    let cc = aster_tpm::read_be32(cmd, 6);
-    if device.cc_table().lookup(cc).is_some() {
-        let mut io = device.io_mutex().lock();
-        match aster_tpm::space_transmit(
-            space, &mut *io, device.cc_table(),
-            ctx_buf, ses_buf, cmd, cmd_len, rsp,
-        ) {
-            Ok(n) => Ok(n),
-            Err(aster_tpm::XmitErr::BadHandle) => Err(aster_tpm::IoErr::NotFound),
-            Err(_) => Err(aster_tpm::IoErr::Fatal),
-        }
-    } else {
-        let mut txn = space.begin();
-        let mut io = device.io_mutex().lock();
-        let _ = aster_tpm::load_space(txn.table(), &mut *io, ctx_buf, ses_buf);
-        let n = match io.exec_raw(&cmd[..cmd_len], rsp) {
-            Ok(n) => n,
-            Err(e) => { txn.abort(&mut *io); return Err(e); }
-        };
-        let _ = aster_tpm::save_space(txn.table(), &mut *io, ctx_buf, ses_buf);
-        space.commit(txn);
-        Ok(n)
-    }
-}
-
 impl PerOpenFileOps for TpmRmFile {
     fn check_seekable(&self) -> Result<()> {
         return_errno_with_message!(Errno::ESPIPE, "the TPM device is not seekable");
     }
-    fn is_offset_aware(&self) -> bool { false }
+    fn is_offset_aware(&self) -> bool {
+        false
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -2,14 +2,20 @@ use core::ops::Range;
 
 use ostd::mm::Paddr;
 use spin::Mutex;
-use tpm_core::chip::CtxIo;
 use tpm_core::{
-    BootErr, ChipLink, Limits, Tis, Xfer, bring_up, cmd::SU_CLEAR, module::IoErr, tis::TisErr,
+    BootErr, ChipLink, Limits, Tis, Xfer, bring_up,
+    chip::{ChipTransport, CtxIo},
+    cmd::SU_CLEAR,
+    module::{IoErr, Space},
+    rewrite::read_be32,
+    tis::TisErr,
 };
 
-use crate::extcrypto::check_abi;
-use crate::mmio::TisMmio;
-use crate::space_io::{CcAttrs, CcTable};
+use crate::{
+    extcrypto::check_abi,
+    mmio::TisMmio,
+    space_io::{CcAttrs, CcTable, MAX_COMMANDS, XmitErr, space_transmit},
+};
 
 pub const TPM_TIS_BASE: Paddr = 0xFED4_0000;
 pub const TPM_TIS_SIZE: usize = 0x5000;
@@ -18,6 +24,7 @@ const POLL_SPIN: u32 = 1000;
 pub enum TpmInitErr {
     Mmio(TisErr),
     Boot(BootErr),
+    Commands(IoErr),
 }
 
 pub struct TpmDevice {
@@ -32,164 +39,134 @@ impl TpmDevice {
         chip.exec_raw(cmd, rsp)
     }
 
-    pub fn limits(&self) -> &Limits { &self.limits }
+    pub fn limits(&self) -> &Limits {
+        &self.limits
+    }
 
-    pub fn cc_table(&self) -> &CcTable { &self.cc_table }
+    pub fn cc_table(&self) -> &CcTable {
+        &self.cc_table
+    }
 
-    /// 获取底层 Mutex 引用，用于 space_transmit 需要长期持锁的场景。
-    pub fn io_mutex(&self) -> &Mutex<CtxIo<ChipLink<TisMmio>>> {
-        &self.inner
+    pub fn transmit_space(
+        &self,
+        space: &mut Space,
+        ctx_buf: &mut [u8],
+        ses_buf: &mut [u8],
+        cmd: &mut [u8],
+        cmd_len: usize,
+        rsp: &mut [u8],
+    ) -> Result<usize, XmitErr> {
+        let mut io = self.inner.lock();
+        space_transmit(
+            space,
+            &mut *io,
+            &self.cc_table,
+            ctx_buf,
+            ses_buf,
+            cmd,
+            cmd_len,
+            rsp,
+        )
+    }
+
+    pub fn close_space(&self, space: &mut Space) {
+        let mut io = self.inner.lock();
+        let transaction = space.begin();
+        transaction.abort(&mut *io);
     }
 }
 
-fn build_cc_table() -> CcTable {
-    let mut t = CcTable::empty();
-    // ContextLoad: 0 handles in, 1 handle out
-    t.push(0x0000_0161, CcAttrs { nr_chandles: 0, has_rhandle: true });
-    // ContextSave: 1 handle in, 0 handles out
-    t.push(0x0000_0162, CcAttrs { nr_chandles: 1, has_rhandle: false });
-    // FlushContext: TPM spec says 0 handles, but the handle to flush is at
-    // HEADER_SIZE in the parameter area. RM must treat it as 1 handle
-    // for virtual→physical mapping to work correctly.
-    t.push(0x0000_0165, CcAttrs { nr_chandles: 1, has_rhandle: false });
-    // StartAuthSession: 2 handles in, 1 handle out
-    t.push(0x0000_0176, CcAttrs { nr_chandles: 2, has_rhandle: true });
-    // CreatePrimary: 1 handle in, 1 handle out
-    t.push(0x0000_0131, CcAttrs { nr_chandles: 1, has_rhandle: true });
-    // Create: 1 handle in, 0 handles out
-    t.push(0x0000_0153, CcAttrs { nr_chandles: 1, has_rhandle: false });
-    // Load: 1 handle in, 1 handle out
-    t.push(0x0000_0157, CcAttrs { nr_chandles: 1, has_rhandle: true });
-    // Unseal: 1 handle in, 0 handles out
-    t.push(0x0000_015E, CcAttrs { nr_chandles: 1, has_rhandle: false });
-    // HMAC_Start: 1 handle in, 1 handle out
-    t.push(0x0000_015B, CcAttrs { nr_chandles: 1, has_rhandle: true });
-    // HashSequenceStart: 0 handles in, 1 handle out
-    t.push(0x0000_0186, CcAttrs { nr_chandles: 0, has_rhandle: true });
-    // ReadPublic: 1 handle in, 0 handles out
-    t.push(0x0000_0173, CcAttrs { nr_chandles: 1, has_rhandle: false });
-    // Sign: 1 handle in, 0 handles out
-    t.push(0x0000_015D, CcAttrs { nr_chandles: 1, has_rhandle: false });
-    // VerifySignature: 1 handle in, 0 handles out
-    t.push(0x0000_0177, CcAttrs { nr_chandles: 1, has_rhandle: false });
-    // HMAC: 1 handle in, 0 handles out
-    t.push(0x0000_0155, CcAttrs { nr_chandles: 1, has_rhandle: false });
-    // GetCapability: 0 handles in, 0 handles out (response has handle list)
-    t.push(0x0000_017A, CcAttrs { nr_chandles: 0, has_rhandle: false });
-    // PolicyCommandCode: 1 handle in (session), 0 handles out
-    t.push(0x0000_016C, CcAttrs { nr_chandles: 1, has_rhandle: false });
-    // PolicyGetDigest: 1 handle in (session), 0 handles out
-    t.push(0x0000_0189, CcAttrs { nr_chandles: 1, has_rhandle: false });
-    // NV_DefineSpace: 1 handle in (auth), 0 handles out
-    t.push(0x0000_012A, CcAttrs { nr_chandles: 1, has_rhandle: false });
-    // NV_Write: 2 handles in (auth + nvIndex), 0 handles out
-    t.push(0x0000_0137, CcAttrs { nr_chandles: 2, has_rhandle: false });
-    // NV_Read: 2 handles in (auth + nvIndex), 0 handles out
-    t.push(0x0000_014E, CcAttrs { nr_chandles: 2, has_rhandle: false });
-    // NV_UndefineSpace: 2 handles in (auth + nvIndex), 0 handles out
-    t.push(0x0000_0122, CcAttrs { nr_chandles: 2, has_rhandle: false });
-    // NV_ReadPublic: 1 handle in (nvIndex), 0 handles out
-    t.push(0x0000_0169, CcAttrs { nr_chandles: 1, has_rhandle: false });
-    // Shutdown: 0 handles in, 0 handles out
-    t.push(0x0000_0145, CcAttrs { nr_chandles: 0, has_rhandle: false });
-    // SelfTest: 0 handles in, 0 handles out
-    t.push(0x0000_0143, CcAttrs { nr_chandles: 0, has_rhandle: false });
-    // EvictControl: 2 handles in, 0 handles out
-    t.push(0x0000_0120, CcAttrs { nr_chandles: 2, has_rhandle: false });
-    // EncryptDecrypt: 1 handle in, 0 handles out
-    t.push(0x0000_0164, CcAttrs { nr_chandles: 1, has_rhandle: false });
-    // RSA_Encrypt: 1 handle in, 0 handles out
-    t.push(0x0000_0174, CcAttrs { nr_chandles: 1, has_rhandle: false });
-    // RSA_Decrypt: 1 handle in, 0 handles out
-    t.push(0x0000_0159, CcAttrs { nr_chandles: 1, has_rhandle: false });
-    // Certify: 2 handles in, 0 handles out
-    t.push(0x0000_0148, CcAttrs { nr_chandles: 2, has_rhandle: false });
-    // Quote: 1 handle in, 0 handles out
-    t.push(0x0000_0158, CcAttrs { nr_chandles: 1, has_rhandle: false });
-    // GetSessionAuditDigest: 3 handles in, 0 handles out
-    t.push(0x0000_014D, CcAttrs { nr_chandles: 3, has_rhandle: false });
-    // GetTime: 2 handles in, 0 handles out
-    t.push(0x0000_014C, CcAttrs { nr_chandles: 2, has_rhandle: false });
-    // CertifyCreation: 2 handles in, 0 handles out
-    t.push(0x0000_014A, CcAttrs { nr_chandles: 2, has_rhandle: false });
-    // HierarchyChangeAuth: 1 handle in, 0 handles out
-    t.push(0x0000_0129, CcAttrs { nr_chandles: 1, has_rhandle: false });
-    // Clear: 1 handle in, 0 handles out
-    t.push(0x0000_0126, CcAttrs { nr_chandles: 1, has_rhandle: false });
-    // ClearControl: 1 handle in, 0 handles out
-    t.push(0x0000_0127, CcAttrs { nr_chandles: 1, has_rhandle: false });
-    // HierarchyControl: 1 handle in, 0 handles out
-    t.push(0x0000_0121, CcAttrs { nr_chandles: 1, has_rhandle: false });
-    // PCR_Event: 1 handle in, 0 handles out
-    t.push(0x0000_013C, CcAttrs { nr_chandles: 1, has_rhandle: false });
-    // PCR_Reset: 1 handle in, 0 handles out
-    t.push(0x0000_013D, CcAttrs { nr_chandles: 1, has_rhandle: false });
-    // SequenceComplete: 1 handle in, 0 handles out
-    t.push(0x0000_013E, CcAttrs { nr_chandles: 1, has_rhandle: false });
-    // SequenceUpdate: 1 handle in, 0 handles out
-    t.push(0x0000_015C, CcAttrs { nr_chandles: 1, has_rhandle: false });
-    // EventSequenceComplete: 2 handles in, 0 handles out
-    t.push(0x0000_0185, CcAttrs { nr_chandles: 2, has_rhandle: false });
-    // ActivateCredential: 2 handles in, 0 handles out
-    t.push(0x0000_0147, CcAttrs { nr_chandles: 2, has_rhandle: false });
-    // MakeCredential: 1 handle in, 0 handles out
-    t.push(0x0000_0168, CcAttrs { nr_chandles: 1, has_rhandle: false });
-    // Import: 1 handle in, 0 handles out
-    t.push(0x0000_0156, CcAttrs { nr_chandles: 1, has_rhandle: false });
-    // Rewrap: 2 handles in, 0 handles out
-    t.push(0x0000_0152, CcAttrs { nr_chandles: 2, has_rhandle: false });
-    // ECDH_KeyGen: 1 handle in, 0 handles out
-    t.push(0x0000_0163, CcAttrs { nr_chandles: 1, has_rhandle: false });
-    // ECDH_ZGen: 1 handle in, 0 handles out
-    t.push(0x0000_0154, CcAttrs { nr_chandles: 1, has_rhandle: false });
-    // ZGen_2Phase: 1 handle in, 0 handles out
-    t.push(0x0000_018D, CcAttrs { nr_chandles: 1, has_rhandle: false });
-    // Commit: 1 handle in, 0 handles out
-    t.push(0x0000_018B, CcAttrs { nr_chandles: 1, has_rhandle: false });
-    // EC_Ephemeral: 0 handles in, 1 handle out
-    t.push(0x0000_018E, CcAttrs { nr_chandles: 0, has_rhandle: true });
-    // FlushContext: 0 handles in, 0 handles out (handled specially by space_transmit)
-    // LoadExternal: 0 handles in, 1 handle out
-    t.push(0x0000_0167, CcAttrs { nr_chandles: 0, has_rhandle: true });
-    // ChangeEPS: 1 handle in, 0 handles out
-    t.push(0x0000_0124, CcAttrs { nr_chandles: 1, has_rhandle: false });
-    // ChangePPS: 1 handle in, 0 handles out
-    t.push(0x0000_0125, CcAttrs { nr_chandles: 1, has_rhandle: false });
-    // DictionaryAttackLockReset: 1 handle in, 0 handles out
-    t.push(0x0000_0139, CcAttrs { nr_chandles: 1, has_rhandle: false });
-    // DictionaryAttackParameters: 1 handle in, 0 handles out
-    t.push(0x0000_013A, CcAttrs { nr_chandles: 1, has_rhandle: false });
-    // PCR_Allocate: 1 handle in, 0 handles out
-    t.push(0x0000_012B, CcAttrs { nr_chandles: 1, has_rhandle: false });
-    // SetCommandCodeAuditStatus: 1 handle in, 0 handles out
-    t.push(0x0000_0140, CcAttrs { nr_chandles: 1, has_rhandle: false });
-    // SetPrimaryPolicy: 1 handle in, 0 handles out
-    t.push(0x0000_012E, CcAttrs { nr_chandles: 1, has_rhandle: false });
-    // StirRandom: 0 handles in, 0 handles out
-    t.push(0x0000_0146, CcAttrs { nr_chandles: 0, has_rhandle: false });
-    // ClockRateAdjust: 1 handle in, 0 handles out
-    t.push(0x0000_0130, CcAttrs { nr_chandles: 1, has_rhandle: false });
-    // ClockSet: 1 handle in, 0 handles out
-    t.push(0x0000_0128, CcAttrs { nr_chandles: 1, has_rhandle: false });
-    // PP_Commands: 1 handle in, 0 handles out
-    t.push(0x0000_012D, CcAttrs { nr_chandles: 1, has_rhandle: false });
-    // SetAlgorithmSet: 1 handle in, 0 handles out
-    t.push(0x0000_013F, CcAttrs { nr_chandles: 1, has_rhandle: false });
-    // Duplicate: 2 handles in, 0 handles out
-    t.push(0x0000_014B, CcAttrs { nr_chandles: 2, has_rhandle: false });
-    // ObjectChangeAuth: 2 handles in, 0 handles out
-    t.push(0x0000_0150, CcAttrs { nr_chandles: 2, has_rhandle: false });
-    // PolicySecret: 2 handles in, 0 handles out
-    t.push(0x0000_0151, CcAttrs { nr_chandles: 2, has_rhandle: false });
-    // PolicySigned: 2 handles in, 0 handles out
-    t.push(0x0000_0160, CcAttrs { nr_chandles: 2, has_rhandle: false });
-    // PolicyNV: 3 handles in, 0 handles out
-    t.push(0x0000_0149, CcAttrs { nr_chandles: 3, has_rhandle: false });
-    // NVCertify: 3 handles in, 0 handles out
-    t.push(0x0000_0195, CcAttrs { nr_chandles: 3, has_rhandle: false });
-    t
-}
+const TPM_CAP_COMMANDS: u32 = 0x0000_0002;
+const TPM_CC_FIRST: u32 = 0x0000_011f;
+const TPM_CC_CONTEXT_SAVE: u32 = 0x0000_0162;
+const TPM_CC_FLUSH_CONTEXT: u32 = 0x0000_0165;
+const TPMA_CC_COMMAND_INDEX_MASK: u32 = 0x0000_ffff;
+const TPMA_CC_VENDOR: u32 = 1 << 29;
+const TPMA_CC_CHANDLES_SHIFT: u32 = 25;
+const TPMA_CC_CHANDLES_MASK: u32 = 0x7;
+const TPMA_CC_RHANDLE: u32 = 1 << 28;
+const GET_CAPABILITY_COMMAND_SIZE: usize = 22;
+const GET_CAPABILITY_RESPONSE_PREFIX: usize = 19;
+const COMMAND_ATTR_SIZE: usize = 4;
 
+fn build_cc_table<T: ChipTransport>(chip: &mut T) -> Result<CcTable, IoErr> {
+    let mut table = CcTable::empty();
+    let mut property = TPM_CC_FIRST;
+    let mut command = [0u8; GET_CAPABILITY_COMMAND_SIZE];
+    let mut response = [0u8; 4096];
+
+    loop {
+        command.fill(0);
+        command[0..2].copy_from_slice(&0x8001u16.to_be_bytes());
+        command[2..6].copy_from_slice(&(GET_CAPABILITY_COMMAND_SIZE as u32).to_be_bytes());
+        command[6..10].copy_from_slice(&0x0000_017au32.to_be_bytes());
+        command[10..14].copy_from_slice(&TPM_CAP_COMMANDS.to_be_bytes());
+        command[14..18].copy_from_slice(&property.to_be_bytes());
+        command[18..22].copy_from_slice(&(MAX_COMMANDS as u32).to_be_bytes());
+
+        let response_len = chip.exec(&command, &mut response)?;
+        if response_len < GET_CAPABILITY_RESPONSE_PREFIX {
+            return Err(IoErr::Protocol);
+        }
+        let declared_len = read_be32(&response, 2) as usize;
+        let response_code = read_be32(&response, 6);
+        let capability = read_be32(&response, 11);
+        let count = read_be32(&response, 15) as usize;
+        let attrs_len = count
+            .checked_mul(COMMAND_ATTR_SIZE)
+            .and_then(|len| GET_CAPABILITY_RESPONSE_PREFIX.checked_add(len))
+            .ok_or(IoErr::Protocol)?;
+        if response_code != 0
+            || capability != TPM_CAP_COMMANDS
+            || declared_len != response_len
+            || attrs_len != response_len
+        {
+            return Err(IoErr::Protocol);
+        }
+        if count == 0 && response[10] != 0 {
+            return Err(IoErr::Protocol);
+        }
+
+        let mut last_cc = property;
+        for index in 0..count {
+            let attr = read_be32(
+                &response,
+                GET_CAPABILITY_RESPONSE_PREFIX + index * COMMAND_ATTR_SIZE,
+            );
+            let cc = (attr & TPMA_CC_COMMAND_INDEX_MASK) | (attr & TPMA_CC_VENDOR);
+            // The TPM command attributes report ContextSave and FlushContext
+            // with no command handles even though their first parameter is a
+            // handle. Linux applies the same correction before using the
+            // attributes for resource-manager handle translation.
+            let nr_chandles = if cc == TPM_CC_CONTEXT_SAVE || cc == TPM_CC_FLUSH_CONTEXT {
+                1
+            } else {
+                ((attr >> TPMA_CC_CHANDLES_SHIFT) & TPMA_CC_CHANDLES_MASK) as usize
+            };
+            let has_rhandle = attr & TPMA_CC_RHANDLE != 0;
+            if !table.push(
+                cc,
+                CcAttrs {
+                    nr_chandles,
+                    has_rhandle,
+                },
+            ) {
+                return Err(IoErr::NoSpace);
+            }
+            last_cc = cc;
+        }
+
+        if response[10] == 0 {
+            break;
+        }
+        property = last_cc.checked_add(1).ok_or(IoErr::Protocol)?;
+    }
+
+    if table.len() == 0 {
+        return Err(IoErr::Protocol);
+    }
+    Ok(table)
+}
 pub fn probe() -> Result<TpmDevice, TpmInitErr> {
     let abi_ok = check_abi();
     if !abi_ok {
@@ -199,14 +176,21 @@ pub fn probe() -> Result<TpmDevice, TpmInitErr> {
     let phys: Range<Paddr> = TPM_TIS_BASE..TPM_TIS_BASE + TPM_TIS_SIZE;
     let mmio = TisMmio::acquire(phys, POLL_SPIN).map_err(TpmInitErr::Mmio)?;
 
-    let tis = Tis { phy: mmio, locality: 0, held: false };
+    let tis = Tis {
+        phy: mmio,
+        locality: 0,
+        held: false,
+    };
     let x = Xfer::new(tis);
     let (x, limits) = bring_up(x, SU_CLEAR, abi_ok).map_err(TpmInitErr::Boot)?;
 
+    let mut chip = ChipLink::new(x);
+    let cc_table = build_cc_table(&mut chip).map_err(TpmInitErr::Commands)?;
+
     ostd::info!("tpm: ready");
     Ok(TpmDevice {
-        inner: Mutex::new(CtxIo::new(ChipLink::new(x))),
+        inner: Mutex::new(CtxIo::new(chip)),
         limits,
-        cc_table: build_cc_table(),
+        cc_table,
     })
 }

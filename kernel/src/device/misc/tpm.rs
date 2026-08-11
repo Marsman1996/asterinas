@@ -30,6 +30,7 @@ use crate::{
 
 const TPM_MINOR: u32 = 224;
 const TPMRM_MINOR: u32 = 225;
+const TPM_BUFSIZE: usize = 4096;
 const TPM_MIN_WRITE: usize = 6;
 const TPM_HEADER_SIZE: usize = 10;
 const TPM2_RC_SIZE_RESPONSE: [u8; TPM_HEADER_SIZE] = [0x80, 0x01, 0, 0, 0, 0x0a, 0, 0, 0, 0x95];
@@ -131,12 +132,9 @@ impl FileState {
     }
 }
 
-fn validate_command(device: &aster_tpm::TpmDevice, command: &[u8]) -> Result<()> {
+fn validate_command(command: &[u8]) -> Result<()> {
     if command.len() < TPM_MIN_WRITE {
         return_errno_with_message!(Errno::EINVAL, "invalid TPM command length");
-    }
-    if command.len() > device.limits().max_command as usize {
-        return_errno_with_message!(Errno::E2BIG, "TPM command too large");
     }
     let declared = u32::from_be_bytes([command[2], command[3], command[4], command[5]]) as usize;
     if command.len() < declared {
@@ -276,16 +274,17 @@ impl FileOps for TpmFile {
         result
     }
     fn write_at(&self, _offset: usize, reader: &mut VmReader, flags: StatusFlags) -> Result<usize> {
-        let device = aster_tpm::device()
-            .ok_or_else(|| Error::with_message(Errno::ENODEV, "no TPM device is available"))?;
         let command_len = reader.remain();
-        let mut command = vec![0u8; command_len];
-        reader.read_fallible(&mut VmWriter::from(&mut command[..]))?;
-        validate_command(device, &command)?;
+        if command_len > TPM_BUFSIZE {
+            return_errno_with_message!(Errno::E2BIG, "TPM command too large");
+        }
         let mut state = self.shared.state.lock();
         if state.busy() {
             return_errno_with_message!(Errno::EBUSY, "TPM file is busy");
         }
+        let mut command = vec![0u8; command_len];
+        reader.read_fallible(&mut VmWriter::from(&mut command[..]))?;
+        validate_command(&command)?;
         state.prepare();
         if flags.contains(StatusFlags::O_NONBLOCK) {
             state.pending_cmd = Some(command);
@@ -497,13 +496,16 @@ impl FileOps for TpmRmFile {
     }
     fn write_at(&self, _offset: usize, reader: &mut VmReader, flags: StatusFlags) -> Result<usize> {
         let command_len = reader.remain();
-        let mut command = vec![0u8; command_len];
-        reader.read_fallible(&mut VmWriter::from(&mut command[..]))?;
-        validate_command(self.shared.device, &command)?;
+        if command_len > TPM_BUFSIZE {
+            return_errno_with_message!(Errno::E2BIG, "TPM command too large");
+        }
         let mut inner = self.shared.inner.lock();
         if inner.file.busy() {
             return_errno_with_message!(Errno::EBUSY, "TPM resource-manager file is busy");
         }
+        let mut command = vec![0u8; command_len];
+        reader.read_fallible(&mut VmWriter::from(&mut command[..]))?;
+        validate_command(&command)?;
         inner.file.prepare();
         if flags.contains(StatusFlags::O_NONBLOCK) {
             inner.file.pending_cmd = Some(command);

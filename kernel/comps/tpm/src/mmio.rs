@@ -3,6 +3,7 @@ use core::ops::Range;
 use ostd::{
     io::IoMem,
     mm::{Paddr, VmIoOnce},
+    task::Task,
 };
 use tpm_core::{phy::TisPhy, tis::TisErr};
 
@@ -10,10 +11,7 @@ pub struct TisMmio {
     /// ostd 发放的 MMIO 句柄。所有寄存器/数据口访问都以它为基址,偏移即
     /// `TPM_ACCESS(l)` 等地址里已折进 `l << 12` 的那个值。
     mmio: IoMem,
-    /// 每次 [`TisPhy::delay`] 空转的圈数。不是时长——轮询驱动的等待粒度取决于
-    /// 目标 CPU 主频,调用方按平台校准。ostd 没有裸机忙等原语;若要以真实时基
-    /// 约束轮询,改从 `ostd::timer` / TSC 取时间,与这里的圈数二选一。
-    spin: u32,
+    polls_since_yield: u8,
 }
 impl TisMmio {
     /// 向 ostd 申领一段 MMIO 区并建立句柄。
@@ -23,11 +21,12 @@ impl TisMmio {
     /// 映射、对齐、以及「这段区域确属 I/O 内存」由 ostd 的分配器核验;申领不到
     /// (地址不在允许的 MMIO 区、已被占用)返回 [`TisErr::Phy`]。
     ///
-    /// `spin` 是每次 [`TisPhy::delay`] 的空转圈数,给零也不违反任何已证性质,
-    /// 只是退化成不等待。
-    pub fn acquire(phys: Range<Paddr>, spin: u32) -> Result<Self, TisErr> {
+    pub fn acquire(phys: Range<Paddr>) -> Result<Self, TisErr> {
         match IoMem::acquire(phys) {
-            Ok(mmio) => Ok(TisMmio { mmio, spin }),
+            Ok(mmio) => Ok(TisMmio {
+                mmio,
+                polls_since_yield: 0,
+            }),
             Err(_) => Err(TisErr::Phy),
         }
     }
@@ -92,13 +91,25 @@ impl TisPhy for TisMmio {
         let _ = self.mmio.write_once::<u8>(addr as usize, &0x40u8);
         {}
     }
-    /// 一次轮询间隔。真实间隔不影响任何被证明的性质(见 `phy.rs` 对应文档),
-    /// 只影响真实耗时。
+    /// Back off between TIS status checks.
+    ///
+    /// Most checks return immediately so that short TPM state transitions are
+    /// observed without a fixed delay. After a bounded polling burst, yield
+    /// once to avoid monopolizing the CPU while a long TPM command is running.
     fn delay(&mut self) {
-        let mut k = 0u32;
-        while k < self.spin {
+        const POLLS_BEFORE_YIELD: u8 = 64;
+
+        self.polls_since_yield += 1;
+        if self.polls_since_yield < POLLS_BEFORE_YIELD {
             core::hint::spin_loop();
-            k += 1;
+            return;
+        }
+
+        self.polls_since_yield = 0;
+        if Task::current().is_some() {
+            Task::yield_now();
+        } else {
+            core::hint::spin_loop();
         }
     }
 }

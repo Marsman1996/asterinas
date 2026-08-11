@@ -3,6 +3,8 @@
 #![no_std]
 #![deny(unsafe_code)]
 
+extern crate alloc;
+
 use component::{ComponentInitError, init_component};
 use spin::Once;
 

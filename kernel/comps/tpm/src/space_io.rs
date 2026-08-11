@@ -11,8 +11,8 @@ use tpm_core::{
     chip::{ChipTransport, CtxIo},
     module::{ContextIo, IoErr, Space},
     rewrite::{
-        HEADER_SIZE, HeaderOutcome, SpaceErr, map_capability_handles, map_command_handles,
-        map_response_handle, read_be32,
+        map_capability_handles, map_command_handles, map_response_handle, read_be32, HeaderOutcome,
+        SpaceErr, HEADER_SIZE,
     },
 };
 
@@ -114,6 +114,8 @@ pub fn space_transmit<T: ChipTransport>(
     cc_table: &CcTable,
     ctx_buf: &mut [u8],
     ses_buf: &mut [u8],
+    work_ctx: &mut [u8],
+    work_ses: &mut [u8],
     cmd: &mut [u8],
     cmd_len: usize,
     rsp: &mut [u8],
@@ -124,6 +126,9 @@ pub fn space_transmit<T: ChipTransport>(
     if cmd_len < HEADER_SIZE {
         return Err(XmitErr::Malformed);
     }
+    if work_ctx.len() != ctx_buf.len() || work_ses.len() != ses_buf.len() {
+        return Err(XmitErr::Io(IoErr::NoSpace));
+    }
     let cc = read_be32(cmd, 6);
     let attrs = cc_table.lookup(cc).ok_or(XmitErr::Unsupported)?;
     if cmd_len < HEADER_SIZE + 4 * attrs.nr_chandles {
@@ -131,9 +136,13 @@ pub fn space_transmit<T: ChipTransport>(
     }
 
     let mut txn = space.begin();
+    // Match Linux work_space: table and backing buffers are all private to
+    // this request and are committed together only after every step succeeds.
+    work_ctx.copy_from_slice(ctx_buf);
+    work_ses.copy_from_slice(ses_buf);
 
     // 1. 把该 space 挂起的瞬态对象 / 会话装回芯片。
-    if let Err(e) = tpm_core::module::load_space(txn.table(), io, &*ctx_buf, &*ses_buf) {
+    if let Err(e) = tpm_core::module::load_space(txn.table(), io, work_ctx, work_ses) {
         txn.abort(io);
         return Err(e.into());
     }
@@ -184,11 +193,13 @@ pub fn space_transmit<T: ChipTransport>(
     };
 
     // 6. 把事务期间产生的瞬态状态存回备份缓冲区，并从芯片上卸载。
-    if let Err(e) = tpm_core::module::save_space(txn.table(), io, ctx_buf, ses_buf) {
+    if let Err(e) = tpm_core::module::save_space(txn.table(), io, work_ctx, work_ses) {
         txn.abort(io);
         return Err(e.into());
     }
 
+    ctx_buf.copy_from_slice(&work_ctx);
+    ses_buf.copy_from_slice(&work_ses);
     space.commit(txn);
     Ok(n)
 }

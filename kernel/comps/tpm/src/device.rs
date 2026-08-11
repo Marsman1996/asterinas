@@ -1,7 +1,7 @@
 use core::ops::Range;
 
-use ostd::mm::Paddr;
-use spin::Mutex;
+use alloc::{vec, vec::Vec};
+use ostd::{mm::Paddr, sync::Mutex};
 use tpm_core::{
     BootErr, ChipLink, Limits, Tis, Xfer, bring_up,
     chip::{ChipTransport, CtxIo},
@@ -14,12 +14,11 @@ use tpm_core::{
 use crate::{
     extcrypto::check_abi,
     mmio::TisMmio,
-    space_io::{CcAttrs, CcTable, MAX_COMMANDS, XmitErr, space_transmit},
+    space_io::{CcAttrs, CcTable, MAX_COMMANDS, SPACE_BUF, XmitErr, space_transmit},
 };
 
 pub const TPM_TIS_BASE: Paddr = 0xFED4_0000;
 pub const TPM_TIS_SIZE: usize = 0x5000;
-const POLL_SPIN: u32 = 1000;
 
 pub enum TpmInitErr {
     Mmio(TisErr),
@@ -27,8 +26,14 @@ pub enum TpmInitErr {
     Commands(IoErr),
 }
 
+struct TpmChipState {
+    io: CtxIo<ChipLink<TisMmio>>,
+    work_ctx: Vec<u8>,
+    work_ses: Vec<u8>,
+}
+
 pub struct TpmDevice {
-    inner: Mutex<CtxIo<ChipLink<TisMmio>>>,
+    inner: Mutex<TpmChipState>,
     limits: Limits,
     cc_table: CcTable,
 }
@@ -36,7 +41,7 @@ pub struct TpmDevice {
 impl TpmDevice {
     pub fn exec(&self, cmd: &[u8], rsp: &mut [u8]) -> Result<usize, IoErr> {
         let mut chip = self.inner.lock();
-        chip.exec_raw(cmd, rsp)
+        chip.io.exec_raw(cmd, rsp)
     }
 
     pub fn limits(&self) -> &Limits {
@@ -56,13 +61,20 @@ impl TpmDevice {
         cmd_len: usize,
         rsp: &mut [u8],
     ) -> Result<usize, XmitErr> {
-        let mut io = self.inner.lock();
+        let mut chip = self.inner.lock();
+        let TpmChipState {
+            io,
+            work_ctx,
+            work_ses,
+        } = &mut *chip;
         space_transmit(
             space,
-            &mut *io,
+            io,
             &self.cc_table,
             ctx_buf,
             ses_buf,
+            work_ctx,
+            work_ses,
             cmd,
             cmd_len,
             rsp,
@@ -70,9 +82,9 @@ impl TpmDevice {
     }
 
     pub fn close_space(&self, space: &mut Space) {
-        let mut io = self.inner.lock();
+        let mut chip = self.inner.lock();
         let transaction = space.begin();
-        transaction.abort(&mut *io);
+        transaction.abort(&mut chip.io);
     }
 }
 
@@ -174,7 +186,7 @@ pub fn probe() -> Result<TpmDevice, TpmInitErr> {
     }
 
     let phys: Range<Paddr> = TPM_TIS_BASE..TPM_TIS_BASE + TPM_TIS_SIZE;
-    let mmio = TisMmio::acquire(phys, POLL_SPIN).map_err(TpmInitErr::Mmio)?;
+    let mmio = TisMmio::acquire(phys).map_err(TpmInitErr::Mmio)?;
 
     let tis = Tis {
         phy: mmio,
@@ -189,7 +201,11 @@ pub fn probe() -> Result<TpmDevice, TpmInitErr> {
 
     ostd::info!("tpm: ready");
     Ok(TpmDevice {
-        inner: Mutex::new(CtxIo::new(chip)),
+        inner: Mutex::new(TpmChipState {
+            io: CtxIo::new(chip),
+            work_ctx: vec![0u8; SPACE_BUF],
+            work_ses: vec![0u8; SPACE_BUF],
+        }),
         limits,
         cc_table,
     })

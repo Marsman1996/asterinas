@@ -22,7 +22,7 @@ pub mod space_io;
 pub use device::{TPM_TIS_BASE, TPM_TIS_SIZE, TpmDevice, TpmInitErr, probe};
 pub use extcrypto::{ExtAesCfb, ExtHmacSha256, ExtRng, ExtSha256, HASH_CTX_CAP, check_abi};
 pub use mmio::TisMmio;
-pub use space_io::{CcAttrs, CcTable, MAX_COMMANDS, SPACE_BUF, XmitErr, space_transmit};
+pub use space_io::{CcAttrs, CcTable, SPACE_BUF, XmitErr, space_transmit};
 pub use tpm_core::{
     ChipLink,
     module::{IoErr, Space, load_space, save_space},

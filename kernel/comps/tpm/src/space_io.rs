@@ -7,12 +7,14 @@
 
 #![allow(dead_code)]
 
+use alloc::vec::Vec;
+
 use tpm_core::{
     chip::{ChipTransport, CtxIo},
     module::{ContextIo, IoErr, Space},
     rewrite::{
-        map_capability_handles, map_command_handles, map_response_handle, read_be32, HeaderOutcome,
-        SpaceErr, HEADER_SIZE,
+        HEADER_SIZE, HeaderOutcome, SpaceErr, map_capability_handles, map_command_handles,
+        map_response_handle, read_be32,
     },
 };
 
@@ -27,50 +29,50 @@ pub struct CcAttrs {
     pub has_rhandle: bool,
 }
 
-/// 命令属性表容量上限。
-pub const MAX_COMMANDS: usize = 256;
+pub(super) const TPMA_CC_COMMAND_INDEX_MASK: u32 = 0x0000_ffff;
+pub(super) const TPMA_CC_VENDOR: u32 = 1 << 29;
+pub(super) const TPMA_CC_CHANDLES_SHIFT: u32 = 25;
+pub(super) const TPMA_CC_CHANDLES_MASK: u32 = 0x7;
+pub(super) const TPMA_CC_RHANDLE: u32 = 1 << 28;
+
+pub(super) fn command_code(attr: u32) -> u32 {
+    (attr & TPMA_CC_COMMAND_INDEX_MASK) | (attr & TPMA_CC_VENDOR)
+}
 
 /// Per-open resource-space backing capacity for object and session contexts.
 pub const SPACE_BUF: usize = 16384;
 
-/// 命令码 -> 属性的定长查找表。引导期一次性填好，此后只读。
+/// 命令码 -> 属性的动态查找表。引导期按 TPM 报告的命令总数填好，此后只读。
 pub struct CcTable {
-    cc: [u32; MAX_COMMANDS],
-    attrs: [CcAttrs; MAX_COMMANDS],
-    len: usize,
+    attrs: Vec<u32>,
 }
 
 impl CcTable {
-    pub const fn empty() -> Self {
-        CcTable {
-            cc: [0; MAX_COMMANDS],
-            attrs: [CcAttrs {
-                nr_chandles: 0,
-                has_rhandle: false,
-            }; MAX_COMMANDS],
-            len: 0,
-        }
+    pub(super) fn with_capacity(capacity: usize) -> Result<Self, IoErr> {
+        let mut attrs = Vec::new();
+        attrs
+            .try_reserve_exact(capacity)
+            .map_err(|_| IoErr::NoSpace)?;
+        Ok(Self { attrs })
     }
 
-    /// 登记一条命令属性；表满时返回 false。
-    pub fn push(&mut self, cc: u32, attrs: CcAttrs) -> bool {
-        if self.len == MAX_COMMANDS {
-            return false;
-        }
-        self.cc[self.len] = cc;
-        self.attrs[self.len] = attrs;
-        self.len += 1;
-        true
+    pub(super) fn push(&mut self, attr: u32) {
+        self.attrs.push(attr);
     }
 
     pub fn lookup(&self, cc: u32) -> Option<CcAttrs> {
-        (0..self.len)
-            .find(|&i| self.cc[i] == cc)
-            .map(|i| self.attrs[i])
+        self.attrs
+            .iter()
+            .copied()
+            .find(|attr| command_code(*attr) == cc)
+            .map(|attr| CcAttrs {
+                nr_chandles: ((attr >> TPMA_CC_CHANDLES_SHIFT) & TPMA_CC_CHANDLES_MASK) as usize,
+                has_rhandle: attr & TPMA_CC_RHANDLE != 0,
+            })
     }
 
     pub fn len(&self) -> usize {
-        self.len
+        self.attrs.len()
     }
 }
 

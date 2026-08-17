@@ -4,7 +4,7 @@
 
 use alloc::vec;
 use core::{
-    sync::atomic::{AtomicBool, Ordering},
+    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
     time::Duration,
 };
 
@@ -12,7 +12,7 @@ use device_id::{DeviceId, MinorId};
 use ostd::sync::WaitQueue;
 
 use crate::{
-    device::{registry::char, Device, DeviceType, DevtmpfsInodeMeta},
+    device::{Device, DeviceType, DevtmpfsInodeMeta, registry::char},
     events::IoEvents,
     fs::{
         file::{PerOpenFileOps, StatusFlags},
@@ -20,11 +20,11 @@ use crate::{
     },
     prelude::*,
     process::signal::{PollHandle, Pollable, Pollee},
-    thread::work_queue::{submit_work_func, WorkPriority},
+    thread::work_queue::{WorkPriority, submit_work_func},
     time::{
+        Timer,
         clocks::MonotonicClock,
         timer::{Timeout, TimerGuard},
-        Timer,
     },
 };
 
@@ -38,6 +38,38 @@ const TPM2_RC_COMMAND_CODE_RESPONSE: [u8; TPM_HEADER_SIZE] =
     [0x80, 0x01, 0, 0, 0, 0x0a, 0, 0x0b, 0x01, 0x43];
 
 static TPM0_OPEN: AtomicBool = AtomicBool::new(false);
+
+struct WorkDrain {
+    in_flight: AtomicUsize,
+    wait: WaitQueue,
+}
+
+impl WorkDrain {
+    fn new() -> Self {
+        Self {
+            in_flight: AtomicUsize::new(0),
+            wait: WaitQueue::new(),
+        }
+    }
+
+    fn begin(&self) {
+        self.in_flight.fetch_add(1, Ordering::AcqRel);
+    }
+
+    fn finish(&self) {
+        let old = self.in_flight.fetch_sub(1, Ordering::AcqRel);
+        debug_assert!(old > 0);
+        if old == 1 {
+            self.wait.wake_all();
+        }
+    }
+
+    // The caller must prevent any new begin() operations before draining.
+    fn drain(&self) {
+        self.wait
+            .wait_until(|| (self.in_flight.load(Ordering::Acquire) == 0).then_some(()));
+    }
+}
 
 struct FileState {
     response: Vec<u8>,
@@ -157,10 +189,15 @@ fn execute_raw(command: &[u8]) -> core::result::Result<Vec<u8>, Errno> {
 }
 
 struct TpmFileShared {
+    // File operations and asynchronous command completion take this lock
+    // before state. Timeout work takes state only, so it can finish while a
+    // file operation drains it.
+    operation_lock: Mutex<()>,
     state: Mutex<FileState>,
     pollee: Pollee,
-    async_wait: WaitQueue,
     timer: Arc<Timer>,
+    async_work: WorkDrain,
+    timeout_work: WorkDrain,
 }
 impl TpmFileShared {
     fn new() -> Arc<Self> {
@@ -168,16 +205,30 @@ impl TpmFileShared {
             let weak = weak.clone();
             let timer = MonotonicClock::timer_manager().create_timer(move |_guard: TimerGuard| {
                 if let Some(shared) = weak.upgrade() {
-                    submit_work_func(move || shared.expire_response(), WorkPriority::Normal);
+                    shared.timeout_work.begin();
+                    let work_shared = shared.clone();
+                    submit_work_func(
+                        move || {
+                            work_shared.expire_response();
+                            work_shared.timeout_work.finish();
+                        },
+                        WorkPriority::Normal,
+                    );
                 }
             });
             Self {
+                operation_lock: Mutex::new(()),
                 state: Mutex::new(FileState::new()),
                 pollee: Pollee::new(),
-                async_wait: WaitQueue::new(),
                 timer,
+                async_work: WorkDrain::new(),
+                timeout_work: WorkDrain::new(),
             }
         })
+    }
+    fn drain_response_timeout(&self) {
+        self.timer.lock().cancel();
+        self.timeout_work.drain();
     }
     fn arm_timeout(&self) {
         if self.state.lock().has_response() {
@@ -198,19 +249,14 @@ impl TpmFileShared {
         self.pollee.notify(IoEvents::OUT);
     }
     fn process_pending(&self) {
+        let _op = self.operation_lock.lock();
         let command = self.state.lock().pending_cmd.take();
         let Some(command) = command else { return };
         let result = execute_raw(&command);
         self.state.lock().complete(result);
-        self.async_wait.wake_all();
         self.arm_timeout();
         self.pollee
             .notify(IoEvents::IN | IoEvents::OUT | IoEvents::ERR);
-    }
-}
-impl Drop for TpmFileShared {
-    fn drop(&mut self) {
-        TPM0_OPEN.store(false, Ordering::Release);
     }
 }
 struct TpmFile {
@@ -218,10 +264,9 @@ struct TpmFile {
 }
 impl Drop for TpmFile {
     fn drop(&mut self) {
-        self.shared
-            .async_wait
-            .wait_until(|| (!self.shared.state.lock().command_enqueued).then_some(()));
-        self.shared.timer.lock().cancel();
+        self.shared.async_work.drain();
+        self.shared.drain_response_timeout();
+        TPM0_OPEN.store(false, Ordering::Release);
     }
 }
 
@@ -261,6 +306,7 @@ impl Pollable for TpmFile {
 }
 impl FileOps for TpmFile {
     fn read_at(&self, _offset: usize, writer: &mut VmWriter, _flags: StatusFlags) -> Result<usize> {
+        let _op = self.shared.operation_lock.lock();
         let (result, drained) = {
             let mut state = self.shared.state.lock();
             let result = state.read(writer);
@@ -268,7 +314,7 @@ impl FileOps for TpmFile {
             (result, drained)
         };
         if drained {
-            self.shared.timer.lock().cancel();
+            self.shared.drain_response_timeout();
         }
         self.shared.pollee.invalidate();
         result
@@ -278,19 +324,37 @@ impl FileOps for TpmFile {
         if command_len > TPM_BUFSIZE {
             return_errno_with_message!(Errno::E2BIG, "TPM command too large");
         }
+
+        let _op = self.shared.operation_lock.lock();
+        let command = {
+            let state = self.shared.state.lock();
+            if state.busy() {
+                return_errno_with_message!(Errno::EBUSY, "TPM file is busy");
+            }
+            let mut command = vec![0u8; command_len];
+            reader.read_fallible(&mut VmWriter::from(&mut command[..]))?;
+            validate_command(&command)?;
+            command
+        };
+
+        // A partial read permits a new write. Retire any timeout belonging to
+        // that old response before starting the accepted command lifecycle.
+        self.shared.drain_response_timeout();
+
         let mut state = self.shared.state.lock();
-        if state.busy() {
-            return_errno_with_message!(Errno::EBUSY, "TPM file is busy");
-        }
-        let mut command = vec![0u8; command_len];
-        reader.read_fallible(&mut VmWriter::from(&mut command[..]))?;
-        validate_command(&command)?;
         state.prepare();
         if flags.contains(StatusFlags::O_NONBLOCK) {
             state.pending_cmd = Some(command);
             drop(state);
+            self.shared.async_work.begin();
             let shared = self.shared.clone();
-            submit_work_func(move || shared.process_pending(), WorkPriority::Normal);
+            submit_work_func(
+                move || {
+                    shared.process_pending();
+                    shared.async_work.finish();
+                },
+                WorkPriority::Normal,
+            );
             self.shared.pollee.notify(IoEvents::OUT);
             return Ok(command_len);
         }
@@ -334,11 +398,13 @@ impl TpmRmInner {
     }
 }
 struct TpmRmShared {
+    operation_lock: Mutex<()>,
     device: &'static aster_tpm::TpmDevice,
     inner: Mutex<TpmRmInner>,
     pollee: Pollee,
-    async_wait: WaitQueue,
     timer: Arc<Timer>,
+    async_work: WorkDrain,
+    timeout_work: WorkDrain,
 }
 impl TpmRmShared {
     fn new(device: &'static aster_tpm::TpmDevice) -> Arc<Self> {
@@ -346,17 +412,31 @@ impl TpmRmShared {
             let weak = weak.clone();
             let timer = MonotonicClock::timer_manager().create_timer(move |_guard: TimerGuard| {
                 if let Some(shared) = weak.upgrade() {
-                    submit_work_func(move || shared.expire_response(), WorkPriority::Normal);
+                    shared.timeout_work.begin();
+                    let work_shared = shared.clone();
+                    submit_work_func(
+                        move || {
+                            work_shared.expire_response();
+                            work_shared.timeout_work.finish();
+                        },
+                        WorkPriority::Normal,
+                    );
                 }
             });
             Self {
+                operation_lock: Mutex::new(()),
                 device,
                 inner: Mutex::new(TpmRmInner::new()),
                 pollee: Pollee::new(),
-                async_wait: WaitQueue::new(),
                 timer,
+                async_work: WorkDrain::new(),
+                timeout_work: WorkDrain::new(),
             }
         })
+    }
+    fn drain_response_timeout(&self) {
+        self.timer.lock().cancel();
+        self.timeout_work.drain();
     }
     fn arm_timeout(&self) {
         if self.inner.lock().file.has_response() {
@@ -417,22 +497,16 @@ impl TpmRmShared {
         Ok(response)
     }
     fn process_pending(&self) {
+        let _op = self.operation_lock.lock();
         let mut inner = self.inner.lock();
         let command = inner.file.pending_cmd.take();
         let Some(command) = command else { return };
         let result = self.execute_locked(&mut inner, command);
         inner.file.complete(result);
         drop(inner);
-        self.async_wait.wake_all();
         self.arm_timeout();
         self.pollee
             .notify(IoEvents::IN | IoEvents::OUT | IoEvents::ERR);
-    }
-}
-impl Drop for TpmRmShared {
-    fn drop(&mut self) {
-        let inner = self.inner.get_mut();
-        self.device.close_space(&mut inner.space);
     }
 }
 struct TpmRmFile {
@@ -440,10 +514,10 @@ struct TpmRmFile {
 }
 impl Drop for TpmRmFile {
     fn drop(&mut self) {
-        self.shared
-            .async_wait
-            .wait_until(|| (!self.shared.inner.lock().file.command_enqueued).then_some(()));
-        self.shared.timer.lock().cancel();
+        self.shared.async_work.drain();
+        self.shared.drain_response_timeout();
+        let mut inner = self.shared.inner.lock();
+        self.shared.device.close_space(&mut inner.space);
     }
 }
 
@@ -482,6 +556,7 @@ impl Pollable for TpmRmFile {
 }
 impl FileOps for TpmRmFile {
     fn read_at(&self, _offset: usize, writer: &mut VmWriter, _flags: StatusFlags) -> Result<usize> {
+        let _op = self.shared.operation_lock.lock();
         let (result, drained) = {
             let mut inner = self.shared.inner.lock();
             let result = inner.file.read(writer);
@@ -489,7 +564,7 @@ impl FileOps for TpmRmFile {
             (result, drained)
         };
         if drained {
-            self.shared.timer.lock().cancel();
+            self.shared.drain_response_timeout();
         }
         self.shared.pollee.invalidate();
         result
@@ -499,19 +574,35 @@ impl FileOps for TpmRmFile {
         if command_len > TPM_BUFSIZE {
             return_errno_with_message!(Errno::E2BIG, "TPM command too large");
         }
+
+        let _op = self.shared.operation_lock.lock();
+        let command = {
+            let inner = self.shared.inner.lock();
+            if inner.file.busy() {
+                return_errno_with_message!(Errno::EBUSY, "TPM resource-manager file is busy");
+            }
+            let mut command = vec![0u8; command_len];
+            reader.read_fallible(&mut VmWriter::from(&mut command[..]))?;
+            validate_command(&command)?;
+            command
+        };
+
+        self.shared.drain_response_timeout();
+
         let mut inner = self.shared.inner.lock();
-        if inner.file.busy() {
-            return_errno_with_message!(Errno::EBUSY, "TPM resource-manager file is busy");
-        }
-        let mut command = vec![0u8; command_len];
-        reader.read_fallible(&mut VmWriter::from(&mut command[..]))?;
-        validate_command(&command)?;
         inner.file.prepare();
         if flags.contains(StatusFlags::O_NONBLOCK) {
             inner.file.pending_cmd = Some(command);
             drop(inner);
+            self.shared.async_work.begin();
             let shared = self.shared.clone();
-            submit_work_func(move || shared.process_pending(), WorkPriority::Normal);
+            submit_work_func(
+                move || {
+                    shared.process_pending();
+                    shared.async_work.finish();
+                },
+                WorkPriority::Normal,
+            );
             self.shared.pollee.notify(IoEvents::OUT);
             return Ok(command_len);
         }

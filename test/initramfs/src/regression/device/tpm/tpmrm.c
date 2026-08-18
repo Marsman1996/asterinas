@@ -1,6 +1,12 @@
 // SPDX-License-Identifier: MPL-2.0
 
-/* Synchronous TPM2 resource-manager regression tests. */
+/*
+ * Linux-compatible resource-manager regression tests for /dev/tpmrm0.
+ *
+ * Each independent open owns a resource space. These tests cover virtual-handle
+ * isolation, capability filtering, context swap-in/swap-out, recovery after
+ * capacity failures, and close cleanup.
+ */
 
 #include <stdbool.h>
 
@@ -13,6 +19,7 @@ FN_SETUP(check_tpm_availability)
 }
 END_SETUP()
 
+/* /dev/tpmrm0 must be registered as a character device. */
 FN_TEST(tpmrm_device_is_character_device)
 {
 	struct stat stat_buf;
@@ -22,6 +29,7 @@ FN_TEST(tpmrm_device_is_character_device)
 }
 END_TEST()
 
+/* Unlike the raw device, the RM permits multiple independent open spaces. */
 FN_TEST(tpmrm_allows_multiple_independent_opens)
 {
 	int fd1 = TEST_SUCC(open(TPMRM_DEVICE, O_RDWR));
@@ -32,6 +40,7 @@ FN_TEST(tpmrm_allows_multiple_independent_opens)
 }
 END_TEST()
 
+/* Known commands pass the CC table; unknown ones get a resmgr-layer TPM RC. */
 FN_TEST(tpmrm_cc_table_accepts_known_and_rejects_unknown_commands)
 {
 	uint8_t response[256] = { 0 };
@@ -66,6 +75,7 @@ FN_TEST(tpmrm_cc_table_accepts_known_and_rejects_unknown_commands)
 }
 END_TEST()
 
+/* Check Linux behavior for flushing a virtual session across RM spaces. */
 FN_TEST(tpmrm_session_flush_across_spaces)
 {
 	uint8_t response[512] = { 0 };
@@ -132,6 +142,7 @@ out:
 }
 END_TEST()
 
+/* Closing an RM fd must synchronously destroy the sessions in its space. */
 FN_TEST(tpmrm_close_discards_session_space)
 {
 	uint8_t response[512] = { 0 };
@@ -179,6 +190,7 @@ FN_TEST(tpmrm_close_discards_session_space)
 }
 END_TEST()
 
+/* Transient handles and capability results are visible only to their owner. */
 FN_TEST(tpmrm_virtualizes_objects_and_filters_capabilities)
 {
 	uint8_t response[1024] = { 0 };
@@ -274,6 +286,7 @@ out:
 }
 END_TEST()
 
+/* Reach transient-object capacity and verify existing objects remain flushable. */
 FN_TEST(tpmrm_transient_object_capacity_and_cleanup)
 {
 	enum { MAX_ATTEMPTS = 8 };
@@ -356,6 +369,7 @@ FN_TEST(tpmrm_transient_object_capacity_and_cleanup)
 }
 END_TEST()
 
+/* Session-capacity failure must preserve virtual sessions created beforehand. */
 FN_TEST(tpmrm_session_capacity_failure_preserves_existing_sessions)
 {
 	enum { MAX_ATTEMPTS = 8 };
@@ -438,6 +452,7 @@ FN_TEST(tpmrm_session_capacity_failure_preserves_existing_sessions)
 }
 END_TEST()
 
+/* Alternate among spaces to force object ContextSave/ContextLoad cycles. */
 FN_TEST(tpmrm_saves_and_restores_objects_across_spaces)
 {
 	enum { NR_SPACES = 4 };

@@ -1,6 +1,12 @@
 // SPDX-License-Identifier: MPL-2.0
 
-/* Synchronous TPM 2.0 protocol regression tests through /dev/tpm0. */
+/*
+ * Synchronous TPM 2.0 message regression tests through /dev/tpm0.
+ *
+ * Besides basic command success paths, this file covers response lengths,
+ * partial reads, preserved error responses, and ContextSave/ContextLoad.
+ * Full key, quote, seal, and policy functionality is intentionally out of scope.
+ */
 
 #include "tpm_test_common.h"
 
@@ -10,6 +16,7 @@ FN_SETUP(check_tpm_availability)
 }
 END_SETUP()
 
+/* GetRandom covers poll state, partial reads, and the TPM response header. */
 FN_TEST(tpm_get_random_and_partial_reads)
 {
     uint8_t response[256] = { 0 };
@@ -75,6 +82,7 @@ FN_TEST(tpm_get_random_and_partial_reads)
 }
 END_TEST()
 
+/* A completely unread response occupies the file buffer; new writes are busy. */
 FN_TEST(tpm_unread_response_blocks_new_command)
 {
     uint8_t response[256] = { 0 };
@@ -98,6 +106,7 @@ FN_TEST(tpm_unread_response_blocks_new_command)
 }
 END_TEST()
 
+/* Linux permits a new write after the first successful, possibly partial, read. */
 FN_TEST(tpm_partial_read_allows_new_command)
 {
     uint8_t response[256] = { 0 };
@@ -128,6 +137,7 @@ FN_TEST(tpm_partial_read_allows_new_command)
 }
 END_TEST()
 
+/* On Linux, a zero-length read ends the current response lifecycle. */
 FN_TEST(tpm_zero_length_read_discards_pending_response)
 {
     uint8_t response[256] = { 0 };
@@ -150,6 +160,7 @@ FN_TEST(tpm_zero_length_read_discards_pending_response)
 }
 END_TEST()
 
+/* Exercise common read-only commands and their variable-length responses. */
 FN_TEST(tpm_gets_capability_and_reads_pcr)
 {
     uint8_t response[512] = { 0 };
@@ -191,6 +202,7 @@ FN_TEST(tpm_gets_capability_and_reads_pcr)
 }
 END_TEST()
 
+/* Neither a TPM error response nor char-layer EINVAL may poison later commands. */
 FN_TEST(tpm_preserves_error_responses_and_recovers)
 {
     uint8_t response[256] = { 0 };
@@ -225,6 +237,7 @@ FN_TEST(tpm_preserves_error_responses_and_recovers)
 }
 END_TEST()
 
+/* GetRandom may return fewer bytes, but all reported lengths must be coherent. */
 FN_TEST(tpm_random_lengths_and_data_sanity)
 {
     static const uint16_t sizes[] = { 1, 32, 64 };
@@ -257,6 +270,7 @@ FN_TEST(tpm_random_lengths_and_data_sanity)
 }
 END_TEST()
 
+/* Save, reload, and flush a session to cover raw context-message round trips. */
 FN_TEST(tpm_context_save_load_round_trip)
 {
     uint8_t response[TPM_BUFSIZE] = { 0 };

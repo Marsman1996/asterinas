@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: MPL-2.0
 
-/* Linux O_NONBLOCK/workqueue semantics for /dev/tpm0. */
+/*
+ * Linux O_NONBLOCK/workqueue regression tests for /dev/tpm0.
+ *
+ * O_NONBLOCK moves command execution to background work. Command validation
+ * remains synchronous in write; poll/read later delivers the result or error.
+ */
 
 #include "tpm_test_common.h"
 
@@ -10,6 +15,7 @@ FN_SETUP(check_tpm_availability)
 }
 END_SETUP()
 
+/* Cover async write, duplicate-write EBUSY, POLLIN, and response delivery. */
 FN_TEST(tpm_nonblocking_write_poll_read)
 {
     uint8_t response[256] = { 0 };
@@ -50,6 +56,7 @@ FN_TEST(tpm_nonblocking_write_poll_read)
 }
 END_TEST()
 
+/* O_NONBLOCK is mutable open-file state and must also work when set by fcntl. */
 FN_TEST(tpm_dynamic_nonblocking_via_fcntl)
 {
     uint8_t response[256] = { 0 };
@@ -73,6 +80,7 @@ FN_TEST(tpm_dynamic_nonblocking_via_fcntl)
 }
 END_TEST()
 
+/* A TPM protocol error remains a readable response, not a write errno. */
 FN_TEST(tpm_nonblocking_unknown_command_returns_response)
 {
     uint8_t response[256] = { 0 };
@@ -94,6 +102,7 @@ FN_TEST(tpm_nonblocking_unknown_command_returns_response)
 }
 END_TEST()
 
+/* An inconsistent header length must return EINVAL before work is queued. */
 FN_TEST(tpm_nonblocking_header_length_error_is_synchronous)
 {
     int fd = TEST_SUCC(open(TPM_DEVICE, O_RDWR | O_NONBLOCK));
@@ -107,6 +116,7 @@ FN_TEST(tpm_nonblocking_header_length_error_is_synchronous)
 }
 END_TEST()
 
+/* The Linux char layer accepts this short buffer; transport fails later. */
 FN_TEST(tpm_nonblocking_nine_byte_buffer_is_accepted_by_char_layer)
 {
     uint8_t command[9] = { 0 };

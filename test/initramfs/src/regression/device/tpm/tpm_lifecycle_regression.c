@@ -179,6 +179,7 @@ static int write_command(int fd, const void *buf, size_t len)
     return 0;
 }
 
+/* A write after a partial read must retire the old response timer safely. */
 static void test_partial_read_then_new_write(const char *path, const char *name)
 {
     uint8_t first[5];
@@ -244,6 +245,7 @@ static void test_partial_read_then_new_write(const char *path, const char *name)
     pass(name);
 }
 
+/* Repeatedly widen the race between unfinished async work and close/reopen. */
 static void test_raw_async_close_reopen(unsigned int loops)
 {
     const char *name = "tpm0 async close -> immediate reopen";
@@ -289,6 +291,7 @@ static void test_raw_async_close_reopen(unsigned int loops)
     pass(name);
 }
 
+/* RM close must drain async work and clean its resource space before return. */
 static void test_rm_async_close_resource_stress(unsigned int loops)
 {
     const char *name = "tpmrm0 async resource close stress";
@@ -352,6 +355,7 @@ static void test_rm_async_close_resource_stress(unsigned int loops)
     pass(name);
 }
 
+/* Write immediately after a full read; stale timeout work must not clear it. */
 static void test_full_read_then_immediate_write(const char *path,
                                                  const char *name,
                                                  unsigned int loops)
@@ -400,6 +404,7 @@ static void test_full_read_then_immediate_write(const char *path,
     pass(name);
 }
 
+/* Optional slow test: wait for response expiry, then verify writability. */
 static void test_response_timeout_slow(const char *path, const char *name)
 {
     if (!device_exists(path)) {

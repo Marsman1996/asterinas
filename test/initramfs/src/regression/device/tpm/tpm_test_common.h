@@ -17,6 +17,7 @@
 
 #include "../../common/test.h"
 
+/* Linux TPM misc-device ABI constants and the fixed char-layer buffer limit. */
 #define TPM_DEVICE "/dev/tpm0"
 #define TPMRM_DEVICE "/dev/tpmrm0"
 #define TPM_MAJOR 10
@@ -35,6 +36,11 @@
 #define TPM2_CC_PCR_READ 0x0000017eU
 #define TPM2_CC_HASH_SEQUENCE_START 0x00000186U
 
+/*
+ * Each array below is a complete big-endian TPM2 wire message for write(2):
+ * [0..2) tag, [2..6) total size, [6..10) command code, then parameters.
+ * Fixed byte arrays keep these tests independent of the userspace tpm2-tss.
+ */
 static const uint8_t tpm_get_random_command[] = {
     0x80, 0x01, 0x00, 0x00, 0x00, 0x0c, 0x00, 0x00, 0x01, 0x7b, 0x00, 0x20,
 };
@@ -91,6 +97,7 @@ static inline uint32_t tpm_read_be32(const uint8_t *bytes)
            ((uint32_t)bytes[2] << 8) | bytes[3];
 }
 
+/* Build only the common ten-byte, no-session command header. */
 static inline void tpm_build_command_header(uint8_t *command, size_t size, uint32_t code)
 {
     command[0] = 0x80;
@@ -121,6 +128,7 @@ static inline void tpm_build_flush_context_command(uint8_t command[14], uint32_t
     command[13] = (uint8_t)handle;
 }
 
+/* A missing device means unsupported test setup, not a driver failure. */
 static inline void tpm_require_device(const char *path)
 {
     if (access(path, F_OK) == 0)
@@ -133,6 +141,7 @@ static inline void tpm_require_device(const char *path)
     exit(EXIT_FAILURE);
 }
 
+/* A synchronous transaction is one complete write followed by one read. */
 static inline ssize_t tpm_transact_sync(int fd, const uint8_t *command,
                                         size_t command_len, uint8_t *response,
                                         size_t response_size)
@@ -147,6 +156,7 @@ static inline ssize_t tpm_transact_sync(int fd, const uint8_t *command,
     return read(fd, response, response_size);
 }
 
+/* Wait for POLLIN before reading a response or errno produced by async work. */
 static inline ssize_t tpm_wait_and_read_response(int fd, uint8_t *response,
                                                  size_t response_size,
                                                  int timeout_ms)

@@ -1,6 +1,12 @@
 // SPDX-License-Identifier: MPL-2.0
 
-/* Linux-compatible regression tests for the raw TPM device /dev/tpm0. */
+/*
+ * Linux-compatible character-device ABI regression tests for raw /dev/tpm0.
+ *
+ * This file covers user-visible file semantics: device identity, exclusive
+ * open, access modes, write/read/poll state, and close behavior. TPM command
+ * behavior lives in tpm_protocol.c; resource-manager behavior lives in tpmrm.c.
+ */
 
 #include <pthread.h>
 #include <sys/ioctl.h>
@@ -13,6 +19,7 @@ struct shared_writer_args {
 	int error;
 };
 
+/* Share one open file description to expose same-file write races. */
 static void *shared_writer_thread(void *arg)
 {
 	struct shared_writer_args *args = arg;
@@ -30,6 +37,7 @@ FN_SETUP(check_tpm_availability)
 }
 END_SETUP()
 
+/* Verify the Linux misc-device identity assigned to /dev/tpm0: 10:224. */
 FN_TEST(tpm_device_identity)
 {
 	struct stat stat_buf;
@@ -44,6 +52,7 @@ FN_TEST(tpm_device_identity)
 }
 END_TEST()
 
+/* The raw device is exclusive; a second independent open must return EBUSY. */
 FN_TEST(tpm_raw_device_is_exclusive)
 {
 	int fd = TEST_SUCC(open(TPM_DEVICE, O_RDWR));
@@ -55,6 +64,7 @@ FN_TEST(tpm_raw_device_is_exclusive)
 }
 END_TEST()
 
+/* An idle file is writable, not readable, and not seekable. */
 FN_TEST(tpm_idle_file_semantics)
 {
 	uint8_t byte = 0;
@@ -83,6 +93,7 @@ FN_TEST(tpm_idle_file_semantics)
 }
 END_TEST()
 
+/* VFS access-mode checks must return EBADF before TPM command handling. */
 FN_TEST(tpm_access_modes_are_enforced)
 {
 	uint8_t byte = 0;
@@ -100,6 +111,7 @@ FN_TEST(tpm_access_modes_are_enforced)
 }
 END_TEST()
 
+/* Cover the minimum size, declared header size, and 4096-byte ABI limit. */
 FN_TEST(tpm_rejects_invalid_command_sizes)
 {
 	uint8_t too_short[5] = { 0 };
@@ -131,6 +143,7 @@ FN_TEST(tpm_rejects_invalid_command_sizes)
 }
 END_TEST()
 
+/* A zero-length write and an unknown ioctl are character-device ABI errors. */
 FN_TEST(tpm_zero_length_write_and_unknown_ioctl)
 {
 	int fd = TEST_SUCC(open(TPM_DEVICE, O_RDWR));
@@ -142,6 +155,7 @@ FN_TEST(tpm_zero_length_write_and_unknown_ioctl)
 }
 END_TEST()
 
+/* The TPM reports an invalid tag in its response; the char layer accepts it. */
 FN_TEST(tpm_invalid_tag_is_returned_as_tpm_error)
 {
 	uint8_t response[256] = { 0 };
@@ -165,6 +179,7 @@ FN_TEST(tpm_invalid_tag_is_returned_as_tpm_error)
 }
 END_TEST()
 
+/* A userspace-copy failure must not consume or overwrite the current state. */
 FN_TEST(tpm_bad_user_buffer_semantics)
 {
 	void *bad_address = (void *)(uintptr_t)-1;
@@ -203,6 +218,7 @@ FN_TEST(tpm_bad_user_buffer_semantics)
 }
 END_TEST()
 
+/* Only one concurrent writer may enter the pending/response lifecycle. */
 FN_TEST(tpm_same_file_serializes_writers)
 {
 	struct shared_writer_args args[2] = { 0 };
@@ -238,6 +254,7 @@ FN_TEST(tpm_same_file_serializes_writers)
 }
 END_TEST()
 
+/* File descriptors created by dup share the response buffer and read offset. */
 FN_TEST(tpm_dup_shares_file_state)
 {
 	uint8_t response[256] = { 0 };
@@ -263,6 +280,7 @@ FN_TEST(tpm_dup_shares_file_state)
 }
 END_TEST()
 
+/* Closing a raw fd does not clean up sessions already created on the TPM. */
 FN_TEST(tpm_raw_close_preserves_session)
 {
 	uint8_t response[512] = { 0 };

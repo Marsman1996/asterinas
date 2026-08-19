@@ -168,13 +168,20 @@ pub fn space_transmit<T: ChipTransport>(
         txn.abort(io);
         return Err(XmitErr::Io(IoErr::Protocol));
     }
-    if attrs.has_rhandle && n < HEADER_SIZE + 4 {
-        txn.abort(io);
-        return Err(XmitErr::Io(IoErr::Protocol));
-    }
+    let response_code = read_be32(&rsp[..n], 6);
 
     // 4. 响应头部句柄：新分配的物理句柄登记 / 虚拟化。
-    let outcome = map_response_handle(txn.table(), attrs.has_rhandle, &mut rsp[..n]);
+    // TPM error responses may contain only the 10-byte header. Call the
+    // formally verified mapper only when its 14-byte precondition holds.
+    let outcome = if response_code == 0 && attrs.has_rhandle {
+        if n < HEADER_SIZE + 4 {
+            txn.abort(io);
+            return Err(XmitErr::Io(IoErr::Protocol));
+        }
+        map_response_handle(txn.table(), true, &mut rsp[..n])
+    } else {
+        HeaderOutcome::NoHandle
+    };
     if let HeaderOutcome::OutOfSlots { flush } = outcome {
         // Match Linux tpm2_commit_space(): flush the untracked new handle,
         // discard the loaded work space, and leave the persistent table and
@@ -186,12 +193,16 @@ pub fn space_transmit<T: ChipTransport>(
 
     // 5. GetCapability 响应体里的句柄列表按同样规则改写、裁剪。
     let is_cap_query = cc == CC_GET_CAPABILITY;
-    let n = match map_capability_handles(&*txn.table(), is_cap_query, rsp, n) {
-        Ok(n) => n,
-        Err(e) => {
-            txn.abort(io);
-            return Err(e.into());
+    let n = if response_code == 0 && is_cap_query {
+        match map_capability_handles(&*txn.table(), true, rsp, n) {
+            Ok(n) => n,
+            Err(_) => {
+                txn.abort(io);
+                return Err(XmitErr::Io(IoErr::Protocol));
+            }
         }
+    } else {
+        n
     };
 
     // 6. 把事务期间产生的瞬态状态存回备份缓冲区，并从芯片上卸载。

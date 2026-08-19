@@ -166,9 +166,10 @@ pub fn load_space<I: ContextIo>(
                 Err(IoErr::NotFound) => {
                     tbl.clear_session(i);
                 }
-                Err(_) => {
-			tbl.set_slot_free(i, false);
-		}
+                Err(e) => {
+                    flush_all(tbl, io);
+                    return Err(e);
+                }
             }
         }
         i += 1;
@@ -199,9 +200,10 @@ pub fn save_space<I: ContextIo>(
                     Err(IoErr::NotFound) => {
                         tbl.set_slot_free(i, false);
                     }
-                    Err(_) => {
-			tbl.set_slot_free(i, false);
-		}
+                    Err(e) => {
+                        flush_all(tbl, io);
+                        return Err(e);
+                    }
                 }
             }
             _ => {}
@@ -220,9 +222,10 @@ pub fn save_space<I: ContextIo>(
                 Err(IoErr::NotFound) => {
                     tbl.clear_session(i);
                 }
-                Err(_) => {
-			tbl.set_slot_free(i, false);
-		}
+                Err(e) => {
+                    flush_all(tbl, io);
+                    return Err(e);
+                }
             }
         }
         i += 1;

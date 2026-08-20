@@ -1,8 +1,9 @@
-
-use crate::cmd::{CC_CONTEXT_LOAD, CC_CONTEXT_SAVE, CC_FLUSH_CONTEXT};
-use crate::module::{ContextIo, IoErr};
-use crate::msg::{ST_NO_SESSIONS, build_header};
-use crate::rewrite::{HEADER_SIZE, read_be32, write_be32};
+use crate::{
+    cmd::{CC_CONTEXT_LOAD, CC_CONTEXT_SAVE, CC_FLUSH_CONTEXT},
+    module::{ContextIo, IoErr},
+    msg::{ST_NO_SESSIONS, build_header},
+    rewrite::{HEADER_SIZE, read_be32, write_be32},
+};
 
 pub const RC_SUCCESS: u32 = 0x0000_0000;
 /// 位 7 置位表示「格式一」返回码：低 6 位是错误号，位 8..11 是出错的
@@ -19,7 +20,11 @@ pub const RC_YIELDED: u32 = 0x0000_0908;
 pub const RC_TESTING: u32 = 0x0000_090A;
 pub const RC_RETRY: u32 = 0x0000_0922;
 pub fn rc_value(rc: u32) -> u32 {
-    if rc & RC_FMT1_BIT == RC_FMT1_BIT { rc & 0xFFu32 } else { rc }
+    if rc & RC_FMT1_BIT == RC_FMT1_BIT {
+        rc & 0xFFu32
+    } else {
+        rc
+    }
 }
 /// 返回码 → 编排层错误。
 ///
@@ -33,7 +38,9 @@ pub fn classify_rc(rc: u32) -> IoErr {
         IoErr::NotFound
     } else if v == RC_INTEGRITY {
         IoErr::Integrity
-    } else if v == RC_CONTEXT_GAP || v == RC_OBJECT_MEMORY || v == RC_SESSION_MEMORY
+    } else if v == RC_CONTEXT_GAP
+        || v == RC_OBJECT_MEMORY
+        || v == RC_SESSION_MEMORY
         || v == RC_MEMORY
     {
         IoErr::NoSpace
@@ -110,6 +117,7 @@ impl<T: ChipTransport> CtxIo<T> {
             self.cbuf[k] = hdr[k];
             k += 1;
         }
+        {}
     }
     /// 把整条命令原样交给底层传输，不做报文组装。
     ///
@@ -132,8 +140,8 @@ impl<T: ChipTransport> ContextIo for CtxIo<T> {
         if off > blob.len() || blob.len() - off < CTX_FIXED {
             return Err(IoErr::Integrity);
         }
-        let size = (blob[off + CTX_SIZE_OFF] as usize) * 256
-            + (blob[off + CTX_SIZE_OFF + 1] as usize);
+        let size =
+            (blob[off + CTX_SIZE_OFF] as usize) * 256 + (blob[off + CTX_SIZE_OFF + 1] as usize);
         let used = CTX_FIXED + size;
         if blob.len() - off < used {
             return Err(IoErr::Integrity);
@@ -147,26 +155,30 @@ impl<T: ChipTransport> ContextIo for CtxIo<T> {
             self.cbuf[HEADER_SIZE + k] = blob[off + k];
             k += 1;
         }
+        {}
         let n = match self.tx.exec(&self.cbuf, &mut self.rbuf) {
             Ok(n) => n,
             Err(e) => {
                 return Err(e);
             }
         };
-        if n < HEADER_SIZE + 4 {
+        if n < HEADER_SIZE {
             return Err(IoErr::Protocol);
         }
         let rc = read_be32(&self.rbuf, 6);
         if rc != RC_SUCCESS {
             return Err(classify_rc(rc));
         }
+        if n < HEADER_SIZE + 4 {
+            return Err(IoErr::Protocol);
+        }
         let h = read_be32(&self.rbuf, HEADER_SIZE);
         Ok((h, used))
     }
     fn save(&mut self, h: u32, out: &mut [u8], off: usize) -> Result<usize, IoErr> {
-        let _out_len = out.len();
         self.put_header(CC_CONTEXT_SAVE, HEADER_SIZE + 4);
         write_be32_arr(&mut self.cbuf, HEADER_SIZE, h);
+        {}
         let n = match self.tx.exec(&self.cbuf, &mut self.rbuf) {
             Ok(n) => n,
             Err(e) => {
@@ -198,14 +210,48 @@ impl<T: ChipTransport> ContextIo for CtxIo<T> {
     fn flush(&mut self, h: u32) {
         self.put_header(CC_FLUSH_CONTEXT, HEADER_SIZE + 4);
         write_be32_arr(&mut self.cbuf, HEADER_SIZE, h);
+        {}
         let _ = self.tx.exec(&self.cbuf, &mut self.rbuf);
     }
 }
 /// [`write_be32`] 的定长数组版本。切片版要求 `&mut [u8]`，而这里操作的是
 /// 结构体里的数组字段，重借用会让 Verus 多出一层义务，直接写更省事。
 fn write_be32_arr(b: &mut [u8; MSG_MAX], off: usize, v: u32) {
+    {}
     b[off] = ((v >> 24) & 0xff) as u8;
     b[off + 1] = ((v >> 16) & 0xff) as u8;
     b[off + 2] = ((v >> 8) & 0xff) as u8;
     b[off + 3] = (v & 0xff) as u8;
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    struct FakeChip {
+        rsp: [u8; HEADER_SIZE],
+    }
+    impl ChipTransport for FakeChip {
+        fn exec(&mut self, _cmd: &[u8], rsp: &mut [u8]) -> Result<usize, IoErr> {
+            let n = self.rsp.len().min(rsp.len());
+            for i in 0..n {
+                rsp[i] = self.rsp[i];
+            }
+            Ok(n)
+        }
+    }
+    #[test]
+    fn context_load_rc_handle_short_response_is_not_protocol() {
+        let mut io = CtxIo::new(FakeChip {
+            rsp: {
+                let mut arr = [0u8; HEADER_SIZE];
+                arr[6] = 0x00;
+                arr[7] = 0x00;
+                arr[8] = 0x00;
+                arr[9] = 0x8B;
+                arr
+            },
+        });
+        let blob = [0u8; CTX_FIXED];
+        let err = io.load(&blob, 0);
+        assert!(matches!(err, Err(IoErr::NotFound)));
+    }
 }

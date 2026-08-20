@@ -16,8 +16,8 @@ pub struct TisMmio {
 impl TisMmio {
     /// 向 ostd 申领一段 MMIO 区并建立句柄。
     ///
-    /// `phys` 是寄存器窗口的物理地址范围,长度须覆盖所有 locality 窗口(典型
-    /// 布局每个 locality 占 4 KiB,窗口至少 `MAX_LOCALITY * 0x1000` 字节)。
+    /// `phys` 是寄存器窗口的物理地址范围,长度须覆盖所有 locality 窗口（从 0 到
+    /// `MAX_LOCALITY - 1` 共 5 个窗口，至少需要 `0x5000` 字节）。
     /// 映射、对齐、以及「这段区域确属 I/O 内存」由 ostd 的分配器核验;申领不到
     /// (地址不在允许的 MMIO 区、已被占用)返回 [`TisErr::Phy`]。
     ///

@@ -1,4 +1,3 @@
-
 use crate::cursor::*;
 
 pub const TPM_HEADER_LEN: usize = 10;

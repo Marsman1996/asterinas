@@ -17,9 +17,9 @@
 //!   - `timeout` 超时/时长的单位修正(纯函数,证明各档恒为正)
 //!   - `boot` 引导编排:启动、自检轮询、休眠,挂在传输层之上
 
-pub mod ord;
-pub mod msg;
+pub mod boot;
 pub mod cmd;
+pub mod msg;
+pub mod ord;
 pub mod rsp;
 pub mod timeout;
-pub mod boot;

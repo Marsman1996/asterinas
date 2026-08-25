@@ -1,11 +1,12 @@
-
-use crate::chip::CtxIo;
-use crate::link::{ChipLink, LiveSet};
-use crate::module::ContextIo;
-use crate::phy::TisPhy;
-use crate::secure::Guarded;
-use crate::session::AuthSession;
-use crate::xfer::Xfer;
+use crate::{
+    chip::CtxIo,
+    link::{ChipLink, LiveSet},
+    module::ContextIo,
+    phy::TisPhy,
+    secure::Guarded,
+    session::AuthSession,
+    xfer::Xfer,
+};
 
 /// 把刚引导完的链路接成一条带账本的芯片链路。
 ///
@@ -51,12 +52,12 @@ pub fn close_ctx<P: TisPhy>(io: CtxIo<ChipLink<P>>) -> ChipLink<P> {
 /// 这条事实是有前提的：**授权阶段不得发出装载类命令**。发了，新的瞬态句柄
 /// 就落在账本管辖的区间里，而当时没人记账。调用纪律只有这一条，代价是授权
 /// 阶段与上下文换入换出不能交错——需要交错时，先 [`to_plain`] 回来。
-pub fn to_auth<P: TisPhy>(
-    link: ChipLink<P>,
-    sess: AuthSession,
-) -> (Guarded<P>, LiveSet) {
+pub fn to_auth<P: TisPhy>(link: ChipLink<P>, sess: AuthSession) -> (Guarded<P>, LiveSet) {
     #[allow(non_shorthand_field_patterns)]
-    let ChipLink { x: x, ledger: ledger } = link;
+    let ChipLink {
+        x: x,
+        ledger: ledger,
+    } = link;
     (Guarded::new(x, sess), ledger)
 }
 /// 离开受保护的往返阶段，把链路与停放的账本重新接回一起。
@@ -66,5 +67,8 @@ pub fn to_auth<P: TisPhy>(
 /// 换也编译得过。真正防住这件事的是所有权：全驱动只在 [`attach`] 处产生过
 /// 一本账，没有第二本可拿。
 pub fn to_plain<P: TisPhy>(g: Guarded<P>, ledger: LiveSet) -> ChipLink<P> {
-    ChipLink { x: g.release(), ledger }
+    ChipLink {
+        x: g.release(),
+        ledger,
+    }
 }

@@ -1,8 +1,4 @@
-
-use crate::cursor::Cursor;
-use crate::msg::TPM_HEADER_LEN;
-use crate::phy::TisPhy;
-use crate::tis::*;
+use crate::{cursor::Cursor, msg::TPM_HEADER_LEN, phy::TisPhy, tis::*};
 
 pub struct Tis<P: TisPhy> {
     pub phy: P,
@@ -198,12 +194,7 @@ impl<P: TisPhy> Tis<P> {
         Ok(())
     }
     /// 从数据口取 `count` 字节到 `out[off..]`。
-    fn recv_data(
-        &mut self,
-        out: &mut [u8],
-        off: usize,
-        count: usize,
-    ) -> Result<(), TisErr> {
+    fn recv_data(&mut self, out: &mut [u8], off: usize, count: usize) -> Result<(), TisErr> {
         let fifo_addr = reg_data_fifo(self.locality);
         let mut got: usize = 0;
         while got < count {
@@ -277,12 +268,7 @@ impl<P: TisPhy> Tis<P> {
     /// 部可能失败的动作收进一个内部函数，让归还成为无条件的收尾语句——于是
     /// 「任何路径退出时 locality 均被释放」不需要逐条路径去查，它是控制流的形
     /// 状直接给出的。这也是本层唯一一处刻意为了可证性而调整的结构。
-    pub fn transmit(
-        &mut self,
-        cmd: &[u8],
-        len: usize,
-        out: &mut [u8],
-    ) -> Result<usize, TisErr> {
+    pub fn transmit(&mut self, cmd: &[u8], len: usize, out: &mut [u8]) -> Result<usize, TisErr> {
         match self.request_locality(budget_of(TIMEOUT_A_MS)) {
             Ok(()) => {}
             Err(e) => return Err(e),
@@ -291,12 +277,7 @@ impl<P: TisPhy> Tis<P> {
         self.relinquish_locality();
         res
     }
-    fn exchange(
-        &mut self,
-        cmd: &[u8],
-        len: usize,
-        out: &mut [u8],
-    ) -> Result<usize, TisErr> {
+    fn exchange(&mut self, cmd: &[u8], len: usize, out: &mut [u8]) -> Result<usize, TisErr> {
         let sts_addr = reg_sts(self.locality);
         self.phy.reset_fifo(sts_addr);
         match self.send_data(cmd, len) {

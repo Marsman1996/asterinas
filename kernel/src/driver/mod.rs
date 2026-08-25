@@ -12,7 +12,6 @@ pub fn init() {
     // the input core. We should find a way to avoid this in the future.
     #[expect(unused_imports)]
     use aster_i8042::*;
-
     #[expect(unused_imports)]
     use aster_tpm::*;
 }

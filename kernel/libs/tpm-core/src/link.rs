@@ -1,10 +1,11 @@
-
-use crate::chip::{ChipTransport, RC_SUCCESS};
-use crate::cmd::{CC_CONTEXT_LOAD, CC_FLUSH_CONTEXT};
-use crate::module::IoErr;
-use crate::phy::TisPhy;
-use crate::rewrite::HEADER_SIZE;
-use crate::xfer::{Xfer, XferErr, peek_be32};
+use crate::{
+    chip::{ChipTransport, RC_SUCCESS},
+    cmd::{CC_CONTEXT_LOAD, CC_FLUSH_CONTEXT},
+    module::IoErr,
+    phy::TisPhy,
+    rewrite::HEADER_SIZE,
+    xfer::{Xfer, XferErr, peek_be32},
+};
 
 /// 芯片当前持有的句柄集合。
 ///

@@ -1,13 +1,14 @@
-
-use crate::cmd::{
-    CC_CONTEXT_LOAD, CC_CONTEXT_SAVE, CC_FLUSH_CONTEXT, CC_GET_CAPABILITY, CC_GET_RANDOM,
-    CC_PCR_EXTEND, CC_PCR_READ, CC_SELF_TEST, CC_SHUTDOWN, CC_STARTUP,
+use crate::{
+    cmd::{
+        CC_CONTEXT_LOAD, CC_CONTEXT_SAVE, CC_FLUSH_CONTEXT, CC_GET_CAPABILITY, CC_GET_RANDOM,
+        CC_PCR_EXTEND, CC_PCR_READ, CC_SELF_TEST, CC_SHUTDOWN, CC_STARTUP,
+    },
+    msg::TPM_HEADER_LEN,
+    phy::TisPhy,
+    rewrite::read_be32,
+    tis::{TisErr, budget_of},
+    tis_core::Tis,
 };
-use crate::msg::TPM_HEADER_LEN;
-use crate::phy::TisPhy;
-use crate::rewrite::read_be32;
-use crate::tis::{TisErr, budget_of};
-use crate::tis_core::Tis;
 
 pub const RC_SUCCESS: u32 = 0x0000_0000;
 /// 警告类返回码的基址。位 11 置位表示「不是失败，是暂时不能办」。
@@ -36,7 +37,10 @@ pub const DURATION_DEFAULT_MS: u32 = 120000;
 ///
 /// 返回值恒为正，因此 [`budget_of`] 折算出的轮询预算恒不为零。
 pub fn duration_ms(cc: u32) -> u32 {
-    if cc == CC_STARTUP || cc == CC_SHUTDOWN || cc == CC_PCR_READ || cc == CC_PCR_EXTEND
+    if cc == CC_STARTUP
+        || cc == CC_SHUTDOWN
+        || cc == CC_PCR_READ
+        || cc == CC_PCR_EXTEND
         || cc == CC_GET_CAPABILITY
     {
         DURATION_SHORT_MS
@@ -95,7 +99,10 @@ pub struct Xfer<P: TisPhy> {
 }
 impl<P: TisPhy> Xfer<P> {
     pub fn new(tis: Tis<P>) -> Self {
-        Xfer { tis, retries: RETRY_MAX }
+        Xfer {
+            tis,
+            retries: RETRY_MAX,
+        }
     }
     /// 运行时自检：状态是否满足发起命令的前提。
     ///
@@ -122,12 +129,7 @@ impl<P: TisPhy> Xfer<P> {
     ///
     /// 返回码取自响应头的固定偏移，取值不依赖任何报文体解析——响应长度已由
     /// 传输层保证不小于一个报文头，因此这次读取无条件成立。
-    fn attempt(
-        &mut self,
-        cmd: &[u8],
-        len: usize,
-        rsp: &mut [u8],
-    ) -> Result<(usize, u32), XferErr> {
+    fn attempt(&mut self, cmd: &[u8], len: usize, rsp: &mut [u8]) -> Result<(usize, u32), XferErr> {
         let n = match self.tis.transmit(cmd, len, rsp) {
             Ok(v) => v,
             Err(e) => return Err(XferErr::Bus(e)),
@@ -166,12 +168,7 @@ impl<P: TisPhy> Xfer<P> {
     /// 从头到尾没有任何一步会修改它，所以第二次发送的字节与第一次逐字节相同。
     /// 若换成收发共用一个缓冲区，这一点就不再成立，重发前必须先恢复原文——
     /// 那是一个容易漏掉且很难在事后察觉的错误，分开两个缓冲区从根上避免了它。
-    pub fn run(
-        &mut self,
-        cmd: &[u8],
-        len: usize,
-        rsp: &mut [u8],
-    ) -> Result<(usize, u32), XferErr> {
+    pub fn run(&mut self, cmd: &[u8], len: usize, rsp: &mut [u8]) -> Result<(usize, u32), XferErr> {
         if !cmd_wf(cmd, len) {
             return Err(XferErr::BadCommand);
         }

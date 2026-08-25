@@ -1,7 +1,9 @@
-use crate::crb::*;
-use crate::crb_phy::{check_cmd_bounds, check_rsp_bounds, CrbPhy};
-use crate::cursor::Cursor;
-use crate::msg::TPM_HEADER_LEN;
+use crate::{
+    crb::*,
+    crb_phy::{CrbPhy, check_cmd_bounds, check_rsp_bounds},
+    cursor::Cursor,
+    msg::TPM_HEADER_LEN,
+};
 
 // ===========================================================================
 // 驱动状态
@@ -153,7 +155,12 @@ impl<P: CrbPhy> Crb<P> {
     // =======================================================================
 
     pub fn transmit(&mut self, cmd: &[u8], len: usize, out: &mut [u8]) -> Result<usize, CrbErr> {
-        if !self.wf() || !self.quiescent() || len < TPM_HEADER_LEN || len > cmd.len() || out.len() < TPM_HEADER_LEN {
+        if !self.wf()
+            || !self.quiescent()
+            || len < TPM_HEADER_LEN
+            || len > cmd.len()
+            || out.len() < TPM_HEADER_LEN
+        {
             return Err(CrbErr::BadLength);
         }
 

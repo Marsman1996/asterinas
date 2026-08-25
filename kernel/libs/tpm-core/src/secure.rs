@@ -1,14 +1,14 @@
 use alloc::vec::Vec;
 
-use crate::auth::{
-    AuthErr, CMD_SESSION_LEN, MAX_SESSIONS, RspAuth, write_cmd_session,
+use crate::{
+    auth::{AuthErr, CMD_SESSION_LEN, MAX_SESSIONS, RspAuth, write_cmd_session},
+    chip::MSG_MAX,
+    crypto::{HmacSha256Ctx, NonceSource, Sha256Ctx},
+    msg::TPM_HEADER_LEN,
+    phy::TisPhy,
+    session::AuthSession,
+    xfer::{RC_SUCCESS, Xfer, XferErr},
 };
-use crate::chip::MSG_MAX;
-use crate::crypto::{HmacSha256Ctx, NonceSource, Sha256Ctx};
-use crate::msg::TPM_HEADER_LEN;
-use crate::phy::TisPhy;
-use crate::session::AuthSession;
-use crate::xfer::{RC_SUCCESS, Xfer, XferErr};
 
 /// 一条带授权的命令在缓冲区里的分区。
 ///
@@ -104,11 +104,14 @@ impl<P: TisPhy> Guarded<P> {
         let nonce = self.sess.our_nonce;
         let sattrs = self.sess.attrs;
         write_cmd_session(cmd, lay.sess_off, handle, &nonce, sattrs);
-        self.sess
-            .finalize::<
-                S,
-                H,
-            >(cmd, lay.sess_off, lay.index, names, lay.parm_off, lay.parm_len);
+        self.sess.finalize::<S, H>(
+            cmd,
+            lay.sess_off,
+            lay.index,
+            names,
+            lay.parm_off,
+            lay.parm_len,
+        );
         let n = match self.x.run(&*cmd, lay.len, &mut self.rbuf) {
             Ok((n, rc)) => {
                 if rc != RC_SUCCESS {

@@ -1,4 +1,3 @@
-
 use crate::tis::TisErr;
 
 pub trait TisPhy {
@@ -11,26 +10,14 @@ pub trait TisPhy {
     /// 取到的内容是器件给的，规约里说不出它是什么，只能保证**落点正确**：
     /// 区间之外一字未动，缓冲区长度不变。防越界的责任因此完全落在调用方给出
     /// 的 `off + n <= out.len()` 上，而这一条由类型检查强制。
-    fn read_fifo(
-        &mut self,
-        addr: u32,
-        out: &mut [u8],
-        off: usize,
-        n: usize,
-    ) -> Result<(), TisErr>;
+    fn read_fifo(&mut self, addr: u32, out: &mut [u8], off: usize, n: usize) -> Result<(), TisErr>;
     /// 把 `data[off..off + n]` 写进数据口。
     ///
     /// 失败时器件可能已经吃进了一段前缀——总线传输不是原子的。规约如实写成
     /// 「累积量只增不减」而不是「原封不动」：后者是假的，写成假的会让基于它的
     /// 推理全部无效。调用方在任何失败路径上都必须复位数据口，复位之后这点不
     /// 精确就无关紧要了。
-    fn write_fifo(
-        &mut self,
-        addr: u32,
-        data: &[u8],
-        off: usize,
-        n: usize,
-    ) -> Result<(), TisErr>;
+    fn write_fifo(&mut self, addr: u32, data: &[u8], off: usize, n: usize) -> Result<(), TisErr>;
     /// 中止当前命令并清空数据口。
     ///
     /// 对应写入「命令就绪」位。它既是发送前的准备动作，也是所有错误路径的收尾

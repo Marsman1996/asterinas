@@ -260,4 +260,3 @@ pub fn probe() -> Result<TpmDevice, TpmInitErr> {
         cc_table,
     })
 }
-

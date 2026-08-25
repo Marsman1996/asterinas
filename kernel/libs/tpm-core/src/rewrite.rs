@@ -1,6 +1,4 @@
-
-use super::handle::*;
-use super::table::SpaceTable;
+use super::{handle::*, table::SpaceTable};
 
 /// 报文头长度：标签 2 字节 + 长度 4 字节 + 命令码或返回码 4 字节。
 pub const HEADER_SIZE: usize = 10;
@@ -23,7 +21,9 @@ pub enum SpaceErr {
     BadHandle,
 }
 pub fn read_be32(b: &[u8], off: usize) -> u32 {
-    ((b[off] as u32) << 24) | ((b[off + 1] as u32) << 16) | ((b[off + 2] as u32) << 8)
+    ((b[off] as u32) << 24)
+        | ((b[off + 1] as u32) << 16)
+        | ((b[off + 2] as u32) << 8)
         | (b[off + 3] as u32)
 }
 pub fn write_be32(b: &mut [u8], off: usize, v: u32) {
@@ -96,39 +96,24 @@ pub fn map_response_handle(
     }
     let phandle = read_be32(rsp, HEADER_SIZE);
     if is_transient_exec(phandle) {
-        if phandle == 0 || phandle == CTX_SAVED_SENTINEL || tbl.lookup(phandle).is_some()
-        {
-            return HeaderOutcome::OutOfSlots {
-                flush: phandle,
-            };
+        if phandle == 0 || phandle == CTX_SAVED_SENTINEL || tbl.lookup(phandle).is_some() {
+            return HeaderOutcome::OutOfSlots { flush: phandle };
         }
         match tbl.intern(phandle) {
             Some(vhandle) => {
                 write_be32(rsp, HEADER_SIZE, vhandle);
-                HeaderOutcome::Virtualized {
-                    vhandle,
-                }
+                HeaderOutcome::Virtualized { vhandle }
             }
-            None => {
-                HeaderOutcome::OutOfSlots {
-                    flush: phandle,
-                }
-            }
+            None => HeaderOutcome::OutOfSlots { flush: phandle },
         }
     } else if is_session_exec(phandle) {
         if phandle == 0 || tbl.has_session_exec(phandle) {
-            return HeaderOutcome::OutOfSlots {
-                flush: phandle,
-            };
+            return HeaderOutcome::OutOfSlots { flush: phandle };
         }
         if tbl.add_session(phandle) {
-            HeaderOutcome::SessionTracked {
-                phandle,
-            }
+            HeaderOutcome::SessionTracked { phandle }
         } else {
-            HeaderOutcome::OutOfSlots {
-                flush: phandle,
-            }
+            HeaderOutcome::OutOfSlots { flush: phandle }
         }
     } else {
         HeaderOutcome::Unknown { phandle }

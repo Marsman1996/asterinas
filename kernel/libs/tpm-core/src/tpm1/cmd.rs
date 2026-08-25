@@ -1,9 +1,12 @@
-
-use crate::cursor::*;
-use crate::tpm1::msg::{build_header1, HEADER_LEN, TAG_RQU_COMMAND};
-use crate::tpm1::ord::{
-    ORD_CONTINUE_SELF_TEST, ORD_EXTEND, ORD_GET_CAPABILITY, ORD_GET_RANDOM, ORD_PCR_READ,
-    ORD_SAVE_STATE, ORD_STARTUP,
+use crate::{
+    cursor::*,
+    tpm1::{
+        msg::{HEADER_LEN, TAG_RQU_COMMAND, build_header1},
+        ord::{
+            ORD_CONTINUE_SELF_TEST, ORD_EXTEND, ORD_GET_CAPABILITY, ORD_GET_RANDOM, ORD_PCR_READ,
+            ORD_SAVE_STATE, ORD_STARTUP,
+        },
+    },
 };
 
 pub const SHA1_DIGEST_LEN: usize = 20;

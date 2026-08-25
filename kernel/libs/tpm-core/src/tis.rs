@@ -1,4 +1,3 @@
-
 pub const ACCESS_VALID: u8 = 0x80;
 pub const ACCESS_ACTIVE_LOCALITY: u8 = 0x20;
 pub const ACCESS_REQUEST_PENDING: u8 = 0x04;

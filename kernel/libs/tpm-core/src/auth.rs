@@ -1,6 +1,4 @@
-
-use crate::crypto::*;
-use crate::cursor::Cursor;
+use crate::{crypto::*, cursor::Cursor};
 
 const _: () = ();
 /// 标签 2 字节 + 长度 4 字节 + 命令码或返回码 4 字节。
@@ -62,11 +60,7 @@ pub fn rp_hash<S: Sha256Ctx>(rc: u32, ordinal: u32, parms: &[u8]) -> [u8; SHA256
     s.finish()
 }
 /// `names` 是各授权句柄名字的顺序拼接，由会话层准备。
-pub fn cp_hash<S: Sha256Ctx>(
-    ordinal: u32,
-    names: &[u8],
-    parms: &[u8],
-) -> [u8; SHA256_LEN] {
+pub fn cp_hash<S: Sha256Ctx>(ordinal: u32, names: &[u8], parms: &[u8]) -> [u8; SHA256_LEN] {
     let mut s = S::new();
     let ord_b = be32_arr(ordinal);
     s.update(&ord_b[..]);
@@ -160,11 +154,7 @@ fn read_nonce(raw: &[u8], off: usize) -> [u8; NONCE_LEN] {
 ///   放行任意值，后面所有偏移就都由对端说了算。
 /// - **长度字段必须与实到字节数相等。** 少一字节意味着解析会读到不属于本
 ///   条响应的数据，多一字节意味着上层截断有误。
-pub fn parse_rsp_auth(
-    raw: &[u8],
-    rhandles: usize,
-    index: usize,
-) -> Result<RspAuth, AuthErr> {
+pub fn parse_rsp_auth(raw: &[u8], rhandles: usize, index: usize) -> Result<RspAuth, AuthErr> {
     if raw.len() < HEADER_LEN {
         return Err(AuthErr::Malformed);
     }

@@ -1,6 +1,4 @@
-
-use crate::auth::*;
-use crate::crypto::*;
+use crate::{auth::*, crypto::*};
 
 const _: () = ();
 /// 会话生命周期。
@@ -37,7 +35,7 @@ pub struct AuthSession {
     /// 由本端记住——这也正是响应无法被挪用到另一条命令上的原因。
     pub ordinal: u32,
     pub state: SessionState,
-        }
+}
 impl AuthSession {
     /// 把会话密钥与口令拼进一块定长缓冲区，返回有效长度。
     fn key_buf(&self) -> ([u8; KEY_MATERIAL_MAX], usize) {
@@ -65,14 +63,7 @@ impl AuthSession {
         tpm_nonce: [u8; NONCE_LEN],
         /* gen removed (ghost) */
     ) -> AuthSession {
-        let key = kdfa32::<
-            H,
-        >(
-            salt,
-            &LABEL_ATH[..],
-            &tpm_nonce[..],
-            &our_nonce[..],
-        );
+        let key = kdfa32::<H>(salt, &LABEL_ATH[..], &tpm_nonce[..], &our_nonce[..]);
         AuthSession {
             handle,
             our_nonce,
@@ -138,9 +129,7 @@ impl AuthSession {
         let cph = cp_hash::<S>(self.ordinal, names, parms);
         let (kb, klen) = self.key_buf();
         let key = &kb[..][0..klen];
-        let mac = auth_hmac::<
-            H,
-        >(key, &cph, &self.our_nonce, &self.tpm_nonce, self.attrs);
+        let mac = auth_hmac::<H>(key, &cph, &self.our_nonce, &self.tpm_nonce, self.attrs);
         patch_hmac(buf, sess_off, &mac);
         self.state = SessionState::Pending(index);
     }
@@ -185,9 +174,7 @@ impl AuthSession {
         let rph = rp_hash::<S>(0, self.ordinal, parms);
         let (kb, klen) = self.key_buf();
         let key = &kb[..][0..klen];
-        let expect = auth_hmac::<
-            H,
-        >(key, &rph, &a.tpm_nonce, &self.our_nonce, self.attrs);
+        let expect = auth_hmac::<H>(key, &rph, &a.tpm_nonce, &self.our_nonce, self.attrs);
         let hmac_end = match a.hmac_off.checked_add(SHA256_LEN) {
             Some(v) => v,
             None => {
@@ -221,24 +208,14 @@ pub fn cfb_material<H: HmacSha256Ctx>(
 ) -> [u8; CFB_MATERIAL_LEN] {
     let (kb, klen) = session.key_buf();
     let key = &kb[..][0..klen];
-    kdfa32::<
-        H,
-    >(key, &LABEL_CFB[..], &newer[..], &older[..])
+    kdfa32::<H>(key, &LABEL_CFB[..], &newer[..], &older[..])
 }
 /// 原地加密命令的首个参数。必须在 [`AuthSession::finalize`] 之前调用。
-pub fn encrypt_parm<A: AesCfb>(
-    aes: &A,
-    material: &[u8; CFB_MATERIAL_LEN],
-    parm: &mut [u8],
-) {
+pub fn encrypt_parm<A: AesCfb>(aes: &A, material: &[u8; CFB_MATERIAL_LEN], parm: &mut [u8]) {
     aes.encrypt(material, parm);
 }
 /// 原地解密响应的首个参数。必须在 [`AuthSession::check_response`] 返回 `Ok` 之后
 /// 调用——对未经校验的字节做解密，等于把对端塞进来的任意数据当成明文交给上层。
-pub fn decrypt_parm<A: AesCfb>(
-    aes: &A,
-    material: &[u8; CFB_MATERIAL_LEN],
-    parm: &mut [u8],
-) {
+pub fn decrypt_parm<A: AesCfb>(aes: &A, material: &[u8; CFB_MATERIAL_LEN], parm: &mut [u8]) {
     aes.decrypt(material, parm);
 }

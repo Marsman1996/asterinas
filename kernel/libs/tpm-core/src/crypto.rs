@@ -1,4 +1,3 @@
-
 /// SHA-256 摘要长度。本层的 nonce、会话密钥、HMAC 字段一律取这个长度。
 pub const SHA256_LEN: usize = 32;
 /// 会话 nonce 长度。规范允许在 16 到摘要长度之间取值，这里取上限：
@@ -53,12 +52,7 @@ pub const LABEL_CFB: [u8; 4] = [0x43, 0x46, 0x42, 0x00];
 /// 调用者。固定成单轮之后，循环不变量与终止性都不必再证，规约也只剩
 /// 一条等式。若将来需要更长的输出，应当另写一个带 `decreases` 的多轮
 /// 版本，而不是把这个函数改成循环——那会让现有调用点的证明全部重来。
-pub fn kdfa32<H: HmacSha256Ctx>(
-    key: &[u8],
-    label: &[u8],
-    u: &[u8],
-    v: &[u8],
-) -> [u8; SHA256_LEN] {
+pub fn kdfa32<H: HmacSha256Ctx>(key: &[u8], label: &[u8], u: &[u8], v: &[u8]) -> [u8; SHA256_LEN] {
     let mut h = H::with_key(key);
     let counter = be32_arr(1);
     let bits = be32_arr(256);

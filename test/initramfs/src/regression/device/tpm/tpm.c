@@ -48,7 +48,7 @@ FN_TEST(tpm_device_identity)
 	 */
 	TEST_RES(stat(TPM_DEVICE, &stat_buf),
 		 S_ISCHR(stat_buf.st_mode) &&
-		 stat_buf.st_rdev == makedev(TPM_MAJOR, TPM_MINOR));
+			 stat_buf.st_rdev == makedev(TPM_MAJOR, TPM_MINOR));
 }
 END_TEST()
 
@@ -77,10 +77,8 @@ FN_TEST(tpm_idle_file_semantics)
 	};
 
 	/* No pending response: Linux reports writable, not readable. */
-	TEST_RES(poll(&pfd, 1, 0),
-		 _ret == 1 &&
-		 (pfd.revents & POLLOUT) &&
-		 !(pfd.revents & POLLIN));
+	TEST_RES(poll(&pfd, 1, 0), _ret == 1 && (pfd.revents & POLLOUT) &&
+					   !(pfd.revents & POLLIN));
 
 	TEST_RES(read(fd, &byte, 0), _ret == 0);
 
@@ -116,12 +114,9 @@ FN_TEST(tpm_rejects_invalid_command_sizes)
 {
 	uint8_t too_short[5] = { 0 };
 	uint8_t declared_too_long[10] = {
-		0x80, 0x01,
-		0x00, 0x00, 0x00, 0x0c,
-		0x00, 0x00, 0x01, 0x7b,
+		0x80, 0x01, 0x00, 0x00, 0x00, 0x0c, 0x00, 0x00, 0x01, 0x7b,
 	};
-	uint8_t *too_large =
-		TEST_RES(calloc(1, TPM_BUFSIZE + 1), _ret != NULL);
+	uint8_t *too_large = TEST_RES(calloc(1, TPM_BUFSIZE + 1), _ret != NULL);
 	int fd = TEST_SUCC(open(TPM_DEVICE, O_RDWR));
 
 	/* Linux tpm_common_write(): size < 6 -> EINVAL. */
@@ -131,8 +126,7 @@ FN_TEST(tpm_rejects_invalid_command_sizes)
 	 * The TPM header declares 12 bytes while write() supplies 10:
 	 * Linux rejects this in the character-device layer with EINVAL.
 	 */
-	TEST_ERRNO(write(fd, declared_too_long,
-			 sizeof(declared_too_long)),
+	TEST_ERRNO(write(fd, declared_too_long, sizeof(declared_too_long)),
 		   EINVAL);
 
 	/* Linux TPM_BUFSIZE is 4096; larger writes return E2BIG. */
@@ -229,8 +223,8 @@ FN_TEST(tpm_same_file_serializes_writers)
 
 	for (size_t i = 0; i < 2; i++) {
 		args[i].fd = fd;
-		TEST_RES(pthread_create(&threads[i], NULL,
-					shared_writer_thread, &args[i]),
+		TEST_RES(pthread_create(&threads[i], NULL, shared_writer_thread,
+					&args[i]),
 			 _ret == 0);
 	}
 
@@ -289,12 +283,9 @@ FN_TEST(tpm_raw_close_preserves_session)
 	ssize_t len;
 	int fd = TEST_SUCC(open(TPM_DEVICE, O_RDWR));
 
-	len = TEST_RES(tpm_transact_sync(
-			       fd,
-			       tpm_start_auth_session_command,
-			       sizeof(tpm_start_auth_session_command),
-			       response,
-			       sizeof(response)),
+	len = TEST_RES(tpm_transact_sync(fd, tpm_start_auth_session_command,
+					 sizeof(tpm_start_auth_session_command),
+					 response, sizeof(response)),
 		       _ret >= TPM_HEADER_SIZE + 4);
 
 	if (len < TPM_HEADER_SIZE + 4) {
@@ -314,17 +305,17 @@ FN_TEST(tpm_raw_close_preserves_session)
 	fd = TEST_SUCC(open(TPM_DEVICE, O_RDWR));
 	tpm_build_flush_context_command(flush_command, session_handle);
 
-	len = TEST_RES(tpm_transact_sync(
-			       fd, flush_command, sizeof(flush_command),
-			       response, sizeof(response)),
+	len = TEST_RES(tpm_transact_sync(fd, flush_command,
+					 sizeof(flush_command), response,
+					 sizeof(response)),
 		       _ret == TPM_HEADER_SIZE);
 	if (len == TPM_HEADER_SIZE)
 		TEST_RES(tpm_read_be32(response + 6), _ret == 0);
 
 	/* A repeated flush reaches the TPM and returns a TPM error response. */
-	len = TEST_RES(tpm_transact_sync(
-			       fd, flush_command, sizeof(flush_command),
-			       response, sizeof(response)),
+	len = TEST_RES(tpm_transact_sync(fd, flush_command,
+					 sizeof(flush_command), response,
+					 sizeof(response)),
 		       _ret >= TPM_HEADER_SIZE);
 	if (len >= TPM_HEADER_SIZE)
 		TEST_RES(tpm_read_be32(response + 6), _ret != 0);

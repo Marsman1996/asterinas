@@ -1,15 +1,12 @@
-
-pub use crate::handle::{
-    SLOTS,
-    is_session_exec as is_session,
-    is_transient_exec as is_transient,
-    valid_phandle_exec as valid_phandle,
+use crate::{handle::*, table::*};
+pub use crate::{
+    handle::{
+        SLOTS, is_session_exec as is_session, is_transient_exec as is_transient,
+        valid_phandle_exec as valid_phandle,
+    },
+    rewrite::{HeaderOutcome, SpaceErr},
+    table::{CtxSlot, SpaceTable},
 };
-pub use crate::rewrite::{HeaderOutcome, SpaceErr};
-pub use crate::table::{CtxSlot, SpaceTable};
-
-use crate::handle::*;
-use crate::table::*;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum IoErr {
@@ -64,7 +61,9 @@ pub struct Transaction {
 }
 impl Space {
     pub fn new() -> Self {
-        Space { tbl: SpaceTable::new() }
+        Space {
+            tbl: SpaceTable::new(),
+        }
     }
     /// 取一份工作副本。使用者可见的状态在此期间保持不变。
     pub fn begin(&self) -> Transaction {
@@ -136,18 +135,16 @@ pub fn load_space<I: ContextIo>(
                 flush_all(tbl, io);
                 return Err(IoErr::NotReady);
             }
-            CtxSlot::Saved => {
-                match io.load(ctx_buf, off) {
-                    Ok((h, used)) => {
-                        tbl.set_slot_live(i, h);
-                        off = off + used;
-                    }
-                    Err(e) => {
-                        flush_all(tbl, io);
-                        return Err(e);
-                    }
+            CtxSlot::Saved => match io.load(ctx_buf, off) {
+                Ok((h, used)) => {
+                    tbl.set_slot_live(i, h);
+                    off = off + used;
                 }
-            }
+                Err(e) => {
+                    flush_all(tbl, io);
+                    return Err(e);
+                }
+            },
         }
         i += 1;
     }
@@ -190,22 +187,20 @@ pub fn save_space<I: ContextIo>(
     let mut off: usize = 0;
     while i < SLOTS {
         match tbl.slot_at(i) {
-            CtxSlot::Live(h) => {
-                match io.save(h, ctx_buf, off) {
-                    Ok(used) => {
-                        io.flush(h);
-                        tbl.set_slot_free(i, true);
-                        off = off + used;
-                    }
-                    Err(IoErr::NotFound) => {
-                        tbl.set_slot_free(i, false);
-                    }
-                    Err(e) => {
-                        flush_all(tbl, io);
-                        return Err(e);
-                    }
+            CtxSlot::Live(h) => match io.save(h, ctx_buf, off) {
+                Ok(used) => {
+                    io.flush(h);
+                    tbl.set_slot_free(i, true);
+                    off = off + used;
                 }
-            }
+                Err(IoErr::NotFound) => {
+                    tbl.set_slot_free(i, false);
+                }
+                Err(e) => {
+                    flush_all(tbl, io);
+                    return Err(e);
+                }
+            },
             _ => {}
         }
         i += 1;

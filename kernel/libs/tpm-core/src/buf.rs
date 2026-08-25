@@ -10,8 +10,7 @@
 //! 与其余各层就地返回 `Result` 的做法不是一回事;字节序也走 `endian`
 //! 而非 `cursor`。两种做法并存已经够了,不宜再多一处。
 
-use crate::endian::*;
-use crate::types::TpmTag;
+use crate::{endian::*, types::TpmTag};
 
 /// `struct tpm_header` 的大小：tag(2) + length(4) + ordinal/return_code(4)。
 pub const TPM_HEADER_SIZE: usize = 10;

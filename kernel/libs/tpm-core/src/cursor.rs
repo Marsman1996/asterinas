@@ -1,4 +1,3 @@
-
 /// 整数 → 大端字节。与 `spec_be16_at` 互为逆运算。
 pub fn be16_bytes(v: u16) -> [u8; 2] {
     [(v / 256) as u8, (v % 256) as u8]

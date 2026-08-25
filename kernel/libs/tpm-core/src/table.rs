@@ -32,7 +32,11 @@ impl SpaceTable {
     }
     /// 把槽位置为空闲或已保存。这两种状态不携带句柄，永远不破坏不变量。
     pub fn set_slot_free(&mut self, i: usize, saved: bool) {
-        self.ctx[i] = if saved { CtxSlot::Saved } else { CtxSlot::Empty };
+        self.ctx[i] = if saved {
+            CtxSlot::Saved
+        } else {
+            CtxSlot::Empty
+        };
     }
     /// 把槽位置为活跃。要求句柄合法且未被登记过。
     ///

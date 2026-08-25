@@ -24,8 +24,7 @@ FN_TEST(tpmrm_device_is_character_device)
 {
 	struct stat stat_buf;
 
-	TEST_RES(stat(TPMRM_DEVICE, &stat_buf),
-		 S_ISCHR(stat_buf.st_mode));
+	TEST_RES(stat(TPMRM_DEVICE, &stat_buf), S_ISCHR(stat_buf.st_mode));
 }
 END_TEST()
 
@@ -48,28 +47,23 @@ FN_TEST(tpmrm_cc_table_accepts_known_and_rejects_unknown_commands)
 	int fd = TEST_SUCC(open(TPMRM_DEVICE, O_RDWR));
 
 	/* A known command must be accepted through the RM. */
-	len = TEST_RES(tpm_transact_sync(
-			       fd,
-			       tpm_get_random_command,
-			       sizeof(tpm_get_random_command),
-			       response,
-			       sizeof(response)),
+	len = TEST_RES(tpm_transact_sync(fd, tpm_get_random_command,
+					 sizeof(tpm_get_random_command),
+					 response, sizeof(response)),
 		       _ret >= TPM_HEADER_SIZE + 2);
 	if (len >= TPM_HEADER_SIZE + 2)
 		TEST_RES(tpm_read_be32(response + 6), _ret == 0);
 
 	/* Linux synthesizes a resource-manager-layer TPM command-code response. */
 	memset(response, 0, sizeof(response));
-	len = TEST_RES(tpm_transact_sync(
-			       fd,
-			       tpm_unknown_command,
-			       sizeof(tpm_unknown_command),
-			       response,
-			       sizeof(response)),
+	len = TEST_RES(tpm_transact_sync(fd, tpm_unknown_command,
+					 sizeof(tpm_unknown_command), response,
+					 sizeof(response)),
 		       _ret == TPM_HEADER_SIZE);
 	if (len == TPM_HEADER_SIZE)
 		TEST_RES(tpm_read_be32(response + 6),
-			 _ret == (TPM2_RC_COMMAND_CODE | TSS2_RESMGR_TPM_RC_LAYER));
+			 _ret == (TPM2_RC_COMMAND_CODE |
+				  TSS2_RESMGR_TPM_RC_LAYER));
 
 	TEST_SUCC(close(fd));
 }
@@ -85,12 +79,10 @@ FN_TEST(tpmrm_session_flush_across_spaces)
 	int owner_fd = TEST_SUCC(open(TPMRM_DEVICE, O_RDWR));
 	int other_fd = TEST_SUCC(open(TPMRM_DEVICE, O_RDWR));
 
-	len = TEST_RES(tpm_transact_sync(
-			       owner_fd,
-			       tpm_start_auth_session_command,
-			       sizeof(tpm_start_auth_session_command),
-			       response,
-			       sizeof(response)),
+	len = TEST_RES(tpm_transact_sync(owner_fd,
+					 tpm_start_auth_session_command,
+					 sizeof(tpm_start_auth_session_command),
+					 response, sizeof(response)),
 		       _ret >= TPM_HEADER_SIZE + 4);
 
 	if (len < TPM_HEADER_SIZE + 4)
@@ -98,8 +90,7 @@ FN_TEST(tpmrm_session_flush_across_spaces)
 
 	TEST_RES(tpm_read_be32(response + 6), _ret == 0);
 	session_handle = tpm_read_be32(response + TPM_HEADER_SIZE);
-	TEST_RES(session_handle >> 24,
-		 _ret == 0x02 || _ret == 0x03);
+	TEST_RES(session_handle >> 24, _ret == 0x02 || _ret == 0x03);
 
 	tpm_build_flush_context_command(flush_command, session_handle);
 
@@ -108,12 +99,9 @@ FN_TEST(tpmrm_session_flush_across_spaces)
 	 * this session handle, and the TPM accepts the flush.
 	 */
 	memset(response, 0, sizeof(response));
-	len = TEST_RES(tpm_transact_sync(
-			       other_fd,
-			       flush_command,
-			       sizeof(flush_command),
-			       response,
-			       sizeof(response)),
+	len = TEST_RES(tpm_transact_sync(other_fd, flush_command,
+					 sizeof(flush_command), response,
+					 sizeof(response)),
 		       _ret == TPM_HEADER_SIZE);
 
 	if (len == TPM_HEADER_SIZE)
@@ -125,12 +113,9 @@ FN_TEST(tpmrm_session_flush_across_spaces)
 	 * response rather than failing write() with a host errno.
 	 */
 	memset(response, 0, sizeof(response));
-	len = TEST_RES(tpm_transact_sync(
-			       owner_fd,
-			       flush_command,
-			       sizeof(flush_command),
-			       response,
-			       sizeof(response)),
+	len = TEST_RES(tpm_transact_sync(owner_fd, flush_command,
+					 sizeof(flush_command), response,
+					 sizeof(response)),
 		       _ret >= TPM_HEADER_SIZE);
 
 	if (len >= TPM_HEADER_SIZE)
@@ -151,12 +136,9 @@ FN_TEST(tpmrm_close_discards_session_space)
 	ssize_t len;
 	int fd = TEST_SUCC(open(TPMRM_DEVICE, O_RDWR));
 
-	len = TEST_RES(tpm_transact_sync(
-			       fd,
-			       tpm_start_auth_session_command,
-			       sizeof(tpm_start_auth_session_command),
-			       response,
-			       sizeof(response)),
+	len = TEST_RES(tpm_transact_sync(fd, tpm_start_auth_session_command,
+					 sizeof(tpm_start_auth_session_command),
+					 response, sizeof(response)),
 		       _ret >= TPM_HEADER_SIZE + 4);
 
 	if (len < TPM_HEADER_SIZE + 4) {
@@ -175,12 +157,9 @@ FN_TEST(tpmrm_close_discards_session_space)
 	fd = TEST_SUCC(open(TPM_DEVICE, O_RDWR));
 	tpm_build_flush_context_command(flush_command, session_handle);
 
-	len = TEST_RES(tpm_transact_sync(
-			       fd,
-			       flush_command,
-			       sizeof(flush_command),
-			       response,
-			       sizeof(response)),
+	len = TEST_RES(tpm_transact_sync(fd, flush_command,
+					 sizeof(flush_command), response,
+					 sizeof(response)),
 		       _ret >= TPM_HEADER_SIZE);
 
 	if (len >= TPM_HEADER_SIZE)
@@ -202,13 +181,11 @@ FN_TEST(tpmrm_virtualizes_objects_and_filters_capabilities)
 	int owner_fd = TEST_SUCC(open(TPMRM_DEVICE, O_RDWR));
 	int other_fd = TEST_SUCC(open(TPMRM_DEVICE, O_RDWR));
 
-	len = TEST_RES(tpm_transact_sync(
-			       owner_fd,
-			       tpm_hash_sequence_start_command,
-			       sizeof(tpm_hash_sequence_start_command),
-			       response,
-			       sizeof(response)),
-		       _ret >= TPM_HEADER_SIZE + 4);
+	len = TEST_RES(
+		tpm_transact_sync(owner_fd, tpm_hash_sequence_start_command,
+				  sizeof(tpm_hash_sequence_start_command),
+				  response, sizeof(response)),
+		_ret >= TPM_HEADER_SIZE + 4);
 
 	if (len < TPM_HEADER_SIZE + 4)
 		goto out;
@@ -219,13 +196,11 @@ FN_TEST(tpmrm_virtualizes_objects_and_filters_capabilities)
 
 	/* The owner sees its own virtual transient handle. */
 	memset(response, 0, sizeof(response));
-	len = TEST_RES(tpm_transact_sync(
-			       owner_fd,
-			       tpm_get_transient_handles_command,
-			       sizeof(tpm_get_transient_handles_command),
-			       response,
-			       sizeof(response)),
-		       _ret >= 19);
+	len = TEST_RES(
+		tpm_transact_sync(owner_fd, tpm_get_transient_handles_command,
+				  sizeof(tpm_get_transient_handles_command),
+				  response, sizeof(response)),
+		_ret >= 19);
 
 	if (len < 19)
 		goto out;
@@ -233,8 +208,7 @@ FN_TEST(tpmrm_virtualizes_objects_and_filters_capabilities)
 	TEST_RES(tpm_read_be32(response + 6), _ret == 0);
 	owner_count = tpm_read_be32(response + 15);
 	TEST_RES(owner_count,
-		 _ret >= 1 &&
-		 _ret <= (uint32_t)(((size_t)len - 19) / 4));
+		 _ret >= 1 && _ret <= (uint32_t)(((size_t)len - 19) / 4));
 
 	if (owner_count <= (uint32_t)(((size_t)len - 19) / 4)) {
 		for (uint32_t i = 0; i < owner_count; i++)
@@ -245,13 +219,11 @@ FN_TEST(tpmrm_virtualizes_objects_and_filters_capabilities)
 
 	/* Another RM space must not see the owner's transient handle. */
 	memset(response, 0, sizeof(response));
-	len = TEST_RES(tpm_transact_sync(
-			       other_fd,
-			       tpm_get_transient_handles_command,
-			       sizeof(tpm_get_transient_handles_command),
-			       response,
-			       sizeof(response)),
-		       _ret >= 19);
+	len = TEST_RES(
+		tpm_transact_sync(other_fd, tpm_get_transient_handles_command,
+				  sizeof(tpm_get_transient_handles_command),
+				  response, sizeof(response)),
+		_ret >= 19);
 
 	if (len >= 19) {
 		TEST_RES(tpm_read_be32(response + 6), _ret == 0);
@@ -269,12 +241,9 @@ FN_TEST(tpmrm_virtualizes_objects_and_filters_capabilities)
 
 	/* The owner can still restore/use/flush its own virtual handle. */
 	memset(response, 0, sizeof(response));
-	len = TEST_RES(tpm_transact_sync(
-			       owner_fd,
-			       flush_command,
-			       sizeof(flush_command),
-			       response,
-			       sizeof(response)),
+	len = TEST_RES(tpm_transact_sync(owner_fd, flush_command,
+					 sizeof(flush_command), response,
+					 sizeof(response)),
 		       _ret == TPM_HEADER_SIZE);
 
 	if (len == TPM_HEADER_SIZE)
@@ -309,8 +278,7 @@ FN_TEST(tpmrm_transient_object_capacity_and_cleanup)
 		uint32_t rc;
 
 		errno = 0;
-		written = write(fd,
-				tpm_hash_sequence_start_command,
+		written = write(fd, tpm_hash_sequence_start_command,
 				sizeof(tpm_hash_sequence_start_command));
 
 		if (written < 0)
@@ -335,8 +303,7 @@ FN_TEST(tpmrm_transient_object_capacity_and_cleanup)
 			break;
 		}
 
-		handles[created] =
-			tpm_read_be32(response + TPM_HEADER_SIZE);
+		handles[created] = tpm_read_be32(response + TPM_HEADER_SIZE);
 		TEST_RES(handles[created] >> 24, _ret == 0x80);
 		created++;
 	}
@@ -353,12 +320,9 @@ FN_TEST(tpmrm_transient_object_capacity_and_cleanup)
 		tpm_build_flush_context_command(flush_command, handles[i]);
 		memset(response, 0, sizeof(response));
 
-		len = TEST_RES(tpm_transact_sync(
-				       fd,
-				       flush_command,
-				       sizeof(flush_command),
-				       response,
-				       sizeof(response)),
+		len = TEST_RES(tpm_transact_sync(fd, flush_command,
+						 sizeof(flush_command),
+						 response, sizeof(response)),
 			       _ret == TPM_HEADER_SIZE);
 
 		if (len == TPM_HEADER_SIZE)
@@ -390,8 +354,7 @@ FN_TEST(tpmrm_session_capacity_failure_preserves_existing_sessions)
 		uint32_t rc;
 
 		errno = 0;
-		written = write(fd,
-				tpm_start_auth_session_command,
+		written = write(fd, tpm_start_auth_session_command,
 				sizeof(tpm_start_auth_session_command));
 
 		if (written < 0)
@@ -416,10 +379,8 @@ FN_TEST(tpmrm_session_capacity_failure_preserves_existing_sessions)
 			break;
 		}
 
-		handles[created] =
-			tpm_read_be32(response + TPM_HEADER_SIZE);
-		TEST_RES(handles[created] >> 24,
-			 _ret == 0x02 || _ret == 0x03);
+		handles[created] = tpm_read_be32(response + TPM_HEADER_SIZE);
+		TEST_RES(handles[created] >> 24, _ret == 0x02 || _ret == 0x03);
 		created++;
 	}
 
@@ -436,12 +397,9 @@ FN_TEST(tpmrm_session_capacity_failure_preserves_existing_sessions)
 		tpm_build_flush_context_command(flush_command, handles[i]);
 		memset(response, 0, sizeof(response));
 
-		len = TEST_RES(tpm_transact_sync(
-				       fd,
-				       flush_command,
-				       sizeof(flush_command),
-				       response,
-				       sizeof(response)),
+		len = TEST_RES(tpm_transact_sync(fd, flush_command,
+						 sizeof(flush_command),
+						 response, sizeof(response)),
 			       _ret == TPM_HEADER_SIZE);
 
 		if (len == TPM_HEADER_SIZE)
@@ -477,19 +435,16 @@ FN_TEST(tpmrm_saves_and_restores_objects_across_spaces)
 
 		memset(response, 0, sizeof(response));
 		len = TEST_RES(tpm_transact_sync(
-				       fds[i],
-				       tpm_hash_sequence_start_command,
+				       fds[i], tpm_hash_sequence_start_command,
 				       sizeof(tpm_hash_sequence_start_command),
-				       response,
-				       sizeof(response)),
+				       response, sizeof(response)),
 			       _ret >= TPM_HEADER_SIZE + 4);
 
 		if (len < TPM_HEADER_SIZE + 4)
 			goto out;
 
 		TEST_RES(tpm_read_be32(response + 6), _ret == 0);
-		handles[i] =
-			tpm_read_be32(response + TPM_HEADER_SIZE);
+		handles[i] = tpm_read_be32(response + TPM_HEADER_SIZE);
 		TEST_RES(handles[i] >> 24, _ret == 0x80);
 		created++;
 	}
@@ -501,12 +456,9 @@ FN_TEST(tpmrm_saves_and_restores_objects_across_spaces)
 		tpm_build_flush_context_command(flush_command, handles[i]);
 		memset(response, 0, sizeof(response));
 
-		len = TEST_RES(tpm_transact_sync(
-				       fds[i],
-				       flush_command,
-				       sizeof(flush_command),
-				       response,
-				       sizeof(response)),
+		len = TEST_RES(tpm_transact_sync(fds[i], flush_command,
+						 sizeof(flush_command),
+						 response, sizeof(response)),
 			       _ret == TPM_HEADER_SIZE);
 
 		if (len == TPM_HEADER_SIZE)

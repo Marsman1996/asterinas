@@ -121,9 +121,9 @@ impl<const N: usize> TpmBuf<N> {
         let start: usize = self.length;
         let mut i: usize = 0;
         while i < src.len() {
-            let b: u8 = *&src[i];
+            let b: u8 = src[i];
             self.data[start + i] = b;
-            i = i + 1;
+            i += 1;
         }
         self.length = start + src.len();
         self.sync_length();
@@ -183,7 +183,7 @@ impl<const N: usize> TpmBuf<N> {
             return false;
         }
         self.append_u32(handle);
-        self.handles = self.handles + 1;
+        self.handles += 1;
         true
     }
     /// 对应 `tpm_buf_read_u8()`。
@@ -195,8 +195,8 @@ impl<const N: usize> TpmBuf<N> {
             self.boundary_error = true;
             return 0;
         }
-        let v = *&self.data[*offset];
-        *offset = *offset + 1;
+        let v = self.data[*offset];
+        *offset += 1;
         v
     }
     /// 对应 `tpm_buf_read_u16()`。
@@ -209,8 +209,8 @@ impl<const N: usize> TpmBuf<N> {
             return 0;
         }
         let o = *offset;
-        let b0 = *&self.data[o];
-        let b1 = *&self.data[o + 1];
+        let b0 = self.data[o];
+        let b1 = self.data[o + 1];
         *offset = o + 2;
         be16_of_exec(b0, b1)
     }
@@ -224,16 +224,19 @@ impl<const N: usize> TpmBuf<N> {
             return 0;
         }
         let o = *offset;
-        let b0 = *&self.data[o];
-        let b1 = *&self.data[o + 1];
-        let b2 = *&self.data[o + 2];
-        let b3 = *&self.data[o + 3];
+        let b0 = self.data[o];
+        let b1 = self.data[o + 1];
+        let b2 = self.data[o + 2];
+        let b3 = self.data[o + 3];
         *offset = o + 4;
         be32_of_exec(b0, b1, b2, b3)
     }
     /// 对应 `tpm_buf_length()`。
     pub fn len(&self) -> usize {
         self.length
+    }
+    pub fn is_empty(&self) -> bool {
+        self.length == 0
     }
     pub fn is_tpm2b(&self) -> bool {
         match self.kind {

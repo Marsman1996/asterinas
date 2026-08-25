@@ -22,15 +22,12 @@ impl<P: TisPhy> Tis<P> {
     fn wait_status(&mut self, mask: u8, budget: u32) -> Result<u8, TisErr> {
         let mut left = budget;
         while left > 0 {
-            let s = match self.status() {
-                Ok(v) => v,
-                Err(e) => return Err(e),
-            };
+            let s = self.status()?;
             if (s & mask) == mask {
                 return Ok(s);
             }
             self.phy.delay();
-            left = left - 1;
+            left -= 1;
         }
         Err(TisErr::Timeout)
     }
@@ -43,17 +40,13 @@ impl<P: TisPhy> Tis<P> {
         let mut left = budget;
         while left > 0 {
             let addr = reg_sts(self.locality);
-            let v = match self.phy.read32(addr) {
-                Ok(v) => v,
-                Err(e) => return Err(e),
-            };
-            {};
+            let v = self.phy.read32(addr)?;
             let b = ((v >> 8u32) & 0xFFFFu32) as u16;
             if b >= 1 {
                 return Ok(b);
             }
             self.phy.delay();
-            left = left - 1;
+            left -= 1;
         }
         Err(TisErr::Timeout)
     }
@@ -64,10 +57,7 @@ impl<P: TisPhy> Tis<P> {
     /// 场景下把「申请正在处理中」误判成「已经拿到」。
     fn check_locality(&mut self) -> Result<bool, TisErr> {
         let addr = reg_access(self.locality);
-        let a = match self.phy.read8(addr) {
-            Ok(v) => v,
-            Err(e) => return Err(e),
-        };
+        let a = self.phy.read8(addr)?;
         let want = ACCESS_ACTIVE_LOCALITY | ACCESS_VALID;
         let mask = want | ACCESS_REQUEST_USE;
         Ok((a & mask) == want)
@@ -77,31 +67,20 @@ impl<P: TisPhy> Tis<P> {
     /// 失败时保证不持有——申请一半失败却把标志留成「持有」，会让后续的归还去
     /// 释放一个从未拿到的资源。
     pub fn request_locality(&mut self, budget: u32) -> Result<(), TisErr> {
-        match self.check_locality() {
-            Ok(true) => {
+        if self.check_locality()? {
+            self.held = true;
+            return Ok(());
+        }
+        let addr = reg_access(self.locality);
+        self.phy.write8(addr, ACCESS_REQUEST_USE)?;
+        let mut left = budget;
+        while left > 0 {
+            if self.check_locality()? {
                 self.held = true;
                 return Ok(());
             }
-            Ok(false) => {}
-            Err(e) => return Err(e),
-        }
-        let addr = reg_access(self.locality);
-        match self.phy.write8(addr, ACCESS_REQUEST_USE) {
-            Ok(()) => {}
-            Err(e) => return Err(e),
-        }
-        let mut left = budget;
-        while left > 0 {
-            match self.check_locality() {
-                Ok(true) => {
-                    self.held = true;
-                    return Ok(());
-                }
-                Ok(false) => {}
-                Err(e) => return Err(e),
-            }
             self.phy.delay();
-            left = left - 1;
+            left -= 1;
         }
         Err(TisErr::Timeout)
     }
@@ -121,73 +100,39 @@ impl<P: TisPhy> Tis<P> {
     /// 数据口一定被清空，绝不会留下半条命令：器件那边若残留半条命令，下一次
     /// 发送就会拼出一条谁也没写过的报文。
     pub fn send_data(&mut self, cmd: &[u8], len: usize) -> Result<(), TisErr> {
-        let res = self.send_data_inner(cmd, len);
-        match res {
-            Ok(()) => Ok(()),
-            Err(e) => {
-                let sts_addr = reg_sts(self.locality);
-                self.phy.reset_fifo(sts_addr);
-                Err(e)
-            }
-        }
+        self.send_data_inner(cmd, len).inspect_err(|_| {
+            let sts_addr = reg_sts(self.locality);
+            self.phy.reset_fifo(sts_addr);
+        })?;
+        Ok(())
     }
     fn send_data_inner(&mut self, cmd: &[u8], len: usize) -> Result<(), TisErr> {
         let sts_addr = reg_sts(self.locality);
         let fifo_addr = reg_data_fifo(self.locality);
-        let s0 = match self.status() {
-            Ok(v) => v,
-            Err(e) => return Err(e),
-        };
+        let s0 = self.status()?;
         if (s0 & STS_COMMAND_READY) == 0 {
             self.phy.reset_fifo(sts_addr);
-            match self.wait_status(STS_COMMAND_READY, budget_of(TIMEOUT_B_MS)) {
-                Ok(_) => {}
-                Err(e) => return Err(e),
-            }
+            self.wait_status(STS_COMMAND_READY, budget_of(TIMEOUT_B_MS))?;
         }
         let last = len - 1;
         let mut count: usize = 0;
         while count < last {
-            let b = match self.burstcount(budget_of(TIMEOUT_A_MS)) {
-                Ok(v) => v,
-                Err(e) => return Err(e),
-            };
+            let b = self.burstcount(budget_of(TIMEOUT_A_MS))?;
             let rem = last - count;
             let bs = b as usize;
             let n = if bs < rem { bs } else { rem };
-            match self.phy.write_fifo(fifo_addr, cmd, count, n) {
-                Ok(()) => {}
-                Err(e) => return Err(e),
-            }
-            let next = match count.checked_add(n) {
-                Some(v) => v,
-                None => return Err(TisErr::Protocol),
-            };
+            self.phy.write_fifo(fifo_addr, cmd, count, n)?;
+            let next = count.checked_add(n).ok_or(TisErr::Protocol)?;
             count = next;
-            match self.wait_status(STS_VALID, budget_of(TIMEOUT_C_MS)) {
-                Ok(_) => {}
-                Err(e) => return Err(e),
-            }
-            let s1 = match self.status() {
-                Ok(v) => v,
-                Err(e) => return Err(e),
-            };
+            self.wait_status(STS_VALID, budget_of(TIMEOUT_C_MS))?;
+            let s1 = self.status()?;
             if (s1 & STS_DATA_EXPECT) == 0 {
                 return Err(TisErr::Protocol);
             }
         }
-        match self.phy.write_fifo(fifo_addr, cmd, count, 1) {
-            Ok(()) => {}
-            Err(e) => return Err(e),
-        }
-        match self.wait_status(STS_VALID, budget_of(TIMEOUT_C_MS)) {
-            Ok(_) => {}
-            Err(e) => return Err(e),
-        }
-        let s2 = match self.status() {
-            Ok(v) => v,
-            Err(e) => return Err(e),
-        };
+        self.phy.write_fifo(fifo_addr, cmd, count, 1)?;
+        self.wait_status(STS_VALID, budget_of(TIMEOUT_C_MS))?;
+        let s2 = self.status()?;
         if (s2 & STS_DATA_EXPECT) != 0 {
             return Err(TisErr::Protocol);
         }
@@ -198,25 +143,13 @@ impl<P: TisPhy> Tis<P> {
         let fifo_addr = reg_data_fifo(self.locality);
         let mut got: usize = 0;
         while got < count {
-            match self.wait_status(STS_DATA_AVAIL | STS_VALID, budget_of(TIMEOUT_C_MS)) {
-                Ok(_) => {}
-                Err(e) => return Err(e),
-            }
-            let b = match self.burstcount(budget_of(TIMEOUT_A_MS)) {
-                Ok(v) => v,
-                Err(e) => return Err(e),
-            };
+            self.wait_status(STS_DATA_AVAIL | STS_VALID, budget_of(TIMEOUT_C_MS))?;
+            let b = self.burstcount(budget_of(TIMEOUT_A_MS))?;
             let rem = count - got;
             let bs = b as usize;
             let n = if bs < rem { bs } else { rem };
-            match self.phy.read_fifo(fifo_addr, out, off + got, n) {
-                Ok(()) => {}
-                Err(e) => return Err(e),
-            }
-            let next = match got.checked_add(n) {
-                Some(v) => v,
-                None => return Err(TisErr::Protocol),
-            };
+            self.phy.read_fifo(fifo_addr, out, off + got, n)?;
+            let next = got.checked_add(n).ok_or(TisErr::Protocol)?;
             got = next;
         }
         Ok(())
@@ -227,15 +160,9 @@ impl<P: TisPhy> Tis<P> {
     /// `n` 相等，也就是满足报文层的格式良好性。解码层因此不必再校验一遍长度，
     /// 两层对「一条响应有多长」的理解由这条后置条件焊死。
     pub fn recv(&mut self, out: &mut [u8]) -> Result<usize, TisErr> {
-        match self.recv_data(out, 0, TPM_HEADER_LEN) {
-            Ok(()) => {}
-            Err(e) => return Err(e),
-        }
+        self.recv_data(out, 0, TPM_HEADER_LEN)?;
         let mut c = Cursor::at(2);
-        let expected = match c.read_be32(&*out) {
-            Some(v) => v,
-            None => return Err(TisErr::BadLength),
-        };
+        let expected = c.read_be32(&*out).ok_or(TisErr::BadLength)?;
         let n = expected as usize;
         if n < TPM_HEADER_LEN {
             return Err(TisErr::BadLength);
@@ -243,20 +170,9 @@ impl<P: TisPhy> Tis<P> {
         if n > out.len() {
             return Err(TisErr::BadLength);
         }
-        {};
-        {};
-        match self.recv_data(out, TPM_HEADER_LEN, n - TPM_HEADER_LEN) {
-            Ok(()) => {}
-            Err(e) => return Err(e),
-        }
-        match self.wait_status(STS_VALID, budget_of(TIMEOUT_C_MS)) {
-            Ok(_) => {}
-            Err(e) => return Err(e),
-        }
-        let s = match self.status() {
-            Ok(v) => v,
-            Err(e) => return Err(e),
-        };
+        self.recv_data(out, TPM_HEADER_LEN, n - TPM_HEADER_LEN)?;
+        self.wait_status(STS_VALID, budget_of(TIMEOUT_C_MS))?;
+        let s = self.status()?;
         if (s & STS_DATA_AVAIL) != 0 {
             return Err(TisErr::Protocol);
         }
@@ -269,10 +185,7 @@ impl<P: TisPhy> Tis<P> {
     /// 「任何路径退出时 locality 均被释放」不需要逐条路径去查，它是控制流的形
     /// 状直接给出的。这也是本层唯一一处刻意为了可证性而调整的结构。
     pub fn transmit(&mut self, cmd: &[u8], len: usize, out: &mut [u8]) -> Result<usize, TisErr> {
-        match self.request_locality(budget_of(TIMEOUT_A_MS)) {
-            Ok(()) => {}
-            Err(e) => return Err(e),
-        }
+        self.request_locality(budget_of(TIMEOUT_A_MS))?;
         let res = self.exchange(cmd, len, out);
         self.relinquish_locality();
         res
@@ -280,31 +193,17 @@ impl<P: TisPhy> Tis<P> {
     fn exchange(&mut self, cmd: &[u8], len: usize, out: &mut [u8]) -> Result<usize, TisErr> {
         let sts_addr = reg_sts(self.locality);
         self.phy.reset_fifo(sts_addr);
-        match self.send_data(cmd, len) {
-            Ok(()) => {}
-            Err(e) => return Err(e),
-        }
-        match self.phy.write8(sts_addr, STS_GO) {
-            Ok(()) => {}
-            Err(e) => {
+        self.send_data(cmd, len)?;
+        self.phy.write8(sts_addr, STS_GO).inspect_err(|_| {
+            self.phy.reset_fifo(sts_addr);
+        })?;
+        self.wait_status(STS_DATA_AVAIL | STS_VALID, budget_of(TIMEOUT_B_MS))
+            .inspect_err(|_| {
                 self.phy.reset_fifo(sts_addr);
-                return Err(e);
-            }
-        }
-        match self.wait_status(STS_DATA_AVAIL | STS_VALID, budget_of(TIMEOUT_B_MS)) {
-            Ok(_) => {}
-            Err(e) => {
-                self.phy.reset_fifo(sts_addr);
-                return Err(e);
-            }
-        }
-        let n = match self.recv(out) {
-            Ok(v) => v,
-            Err(e) => {
-                self.phy.reset_fifo(sts_addr);
-                return Err(e);
-            }
-        };
+            })?;
+        let n = self.recv(out).inspect_err(|_| {
+            self.phy.reset_fifo(sts_addr);
+        })?;
         self.phy.reset_fifo(sts_addr);
         Ok(n)
     }

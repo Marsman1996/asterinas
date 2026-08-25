@@ -74,6 +74,10 @@ impl CcTable {
     pub fn len(&self) -> usize {
         self.attrs.len()
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.attrs.is_empty()
+    }
 }
 
 /// 一次转发可能失败的地方，映射到调用方可读的错误分类。
@@ -110,6 +114,7 @@ impl From<IoErr> for XmitErr {
 ///
 /// `ctx_buf`/`ses_buf` 是该 space 私有的备份缓冲区，跨调用持久化；
 /// `cmd`/`rsp` 是本次调用暂存区，用完即弃。
+#[expect(clippy::too_many_arguments)]
 pub fn space_transmit<T: ChipTransport>(
     space: &mut Space,
     io: &mut CtxIo<T>,
@@ -211,8 +216,8 @@ pub fn space_transmit<T: ChipTransport>(
         return Err(e.into());
     }
 
-    ctx_buf.copy_from_slice(&work_ctx);
-    ses_buf.copy_from_slice(&work_ses);
+    ctx_buf.copy_from_slice(work_ctx);
+    ses_buf.copy_from_slice(work_ses);
     space.commit(txn);
     Ok(n)
 }

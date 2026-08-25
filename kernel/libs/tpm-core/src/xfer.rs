@@ -42,9 +42,10 @@ pub fn duration_ms(cc: u32) -> u32 {
         || cc == CC_PCR_READ
         || cc == CC_PCR_EXTEND
         || cc == CC_GET_CAPABILITY
+        || cc == CC_CONTEXT_LOAD
+        || cc == CC_CONTEXT_SAVE
+        || cc == CC_FLUSH_CONTEXT
     {
-        DURATION_SHORT_MS
-    } else if cc == CC_CONTEXT_LOAD || cc == CC_CONTEXT_SAVE || cc == CC_FLUSH_CONTEXT {
         DURATION_SHORT_MS
     } else if cc == CC_GET_RANDOM {
         DURATION_MEDIUM_MS
@@ -122,7 +123,7 @@ impl<P: TisPhy> Xfer<P> {
         let mut left = ticks;
         while left > 0 {
             self.tis.phy.delay();
-            left = left - 1;
+            left -= 1;
         }
     }
     /// 发一条命令，收一条响应，并取出返回码。
@@ -188,12 +189,12 @@ impl<P: TisPhy> Xfer<P> {
             self.backoff(ticks);
             if ticks < cap {
                 if ticks <= cap - ticks {
-                    ticks = ticks + ticks;
+                    ticks += ticks;
                 } else {
                     ticks = cap;
                 }
             }
-            left = left - 1;
+            left -= 1;
         }
         self.attempt(cmd, len, rsp)
     }

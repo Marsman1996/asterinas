@@ -1,4 +1,4 @@
-use crate::{crypto::SHA256_LEN, cursor::*, rsp::ALG_SHA256};
+use crate::{crypto::SHA256_LEN, cursor::*};
 
 pub const CC_SELF_TEST: u32 = 0x0000_0143;
 pub const CC_STARTUP: u32 = 0x0000_0144;
@@ -91,7 +91,7 @@ pub fn pcr_read_payload(alg_id: u16, pcr_idx: u32) -> [u8; 10] {
     ]
 }
 /// `TPM2_PCR_Extend` 的参数区长度：count(4) + hashAlg(2) + digest(32)。
-pub const PCR_EXTEND_PARM_LEN: usize = 6 + SHA256_LEN;
+pub const PCR_EXTEND_PARAM_LEN: usize = 6 + SHA256_LEN;
 /// `TPM2_PCR_Extend` 的**参数区**（Part 3 §22.2）。
 ///
 /// ```text
@@ -115,10 +115,10 @@ pub const PCR_EXTEND_PARM_LEN: usize = 6 + SHA256_LEN;
 /// 算法标识做成入参而不是写死的常量，是为了让前置条件把它和摘要长度绑在
 /// 一起：这里收的是定长 32 字节，声称成别的算法就是在报文里说了谎。想支持
 /// 第二种算法，摘要参数的类型必须同时改，改不动一半。
-pub fn pcr_extend_payload(alg_id: u16, digest: &[u8; SHA256_LEN]) -> [u8; PCR_EXTEND_PARM_LEN] {
+pub fn pcr_extend_payload(alg_id: u16, digest: &[u8; SHA256_LEN]) -> [u8; PCR_EXTEND_PARAM_LEN] {
     let cnt = be32_bytes(1);
     let alg = be16_bytes(alg_id);
-    let mut out = [0u8; PCR_EXTEND_PARM_LEN];
+    let mut out = [0u8; PCR_EXTEND_PARAM_LEN];
     out[0] = cnt[0];
     out[1] = cnt[1];
     out[2] = cnt[2];
@@ -127,8 +127,8 @@ pub fn pcr_extend_payload(alg_id: u16, digest: &[u8; SHA256_LEN]) -> [u8; PCR_EX
     out[5] = alg[1];
     let mut i: usize = 0;
     while i < SHA256_LEN {
-        out[6 + i] = *&digest[i];
-        i = i + 1;
+        out[6 + i] = digest[i];
+        i += 1;
     }
     out
 }

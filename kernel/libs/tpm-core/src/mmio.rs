@@ -21,7 +21,8 @@ impl<B: TisMmioBackend> TisPhy for TisMmio<B> {
         self.backend.read8(addr)
     }
     fn read32(&mut self, addr: u32) -> Result<u32, TisErr> {
-        self.backend.read32(addr).map(|v| u32::from_le(v))
+        let v = self.backend.read32(addr)?;
+        Ok(u32::from_le(v))
     }
     fn write8(&mut self, addr: u32, value: u8) -> Result<(), TisErr> {
         self.backend.write8(addr, value)
@@ -32,10 +33,7 @@ impl<B: TisMmioBackend> TisPhy for TisMmio<B> {
     fn read_fifo(&mut self, addr: u32, out: &mut [u8], off: usize, n: usize) -> Result<(), TisErr> {
         let mut i = 0usize;
         while i < n {
-            match self.backend.read8(addr) {
-                Ok(b) => out[off + i] = b,
-                Err(e) => return Err(e),
-            }
+            out[off + i] = self.backend.read8(addr)?;
             i += 1;
         }
         Ok(())
@@ -43,21 +41,14 @@ impl<B: TisMmioBackend> TisPhy for TisMmio<B> {
     fn write_fifo(&mut self, addr: u32, data: &[u8], off: usize, n: usize) -> Result<(), TisErr> {
         let mut i = 0usize;
         while i < n {
-            match self.backend.write8(addr, data[off + i]) {
-                Ok(()) => i += 1,
-                Err(e) => {
-                    {}
-                    return Err(e);
-                }
-            }
+            self.backend.write8(addr, data[off + i])?;
+            i += 1;
         }
-        {}
         Ok(())
     }
     /// 写入 `TPM_STS_COMMAND_READY`（0x40）。
     fn reset_fifo(&mut self, addr: u32) {
         let _ = self.backend.write8(addr, 0x40u8);
-        {}
     }
     fn delay(&mut self) {
         for _ in 0..self.spin {

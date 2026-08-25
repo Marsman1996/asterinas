@@ -11,7 +11,7 @@ pub const STS_RESPONSE_RETRY: u8 = 0x02;
 /// locality 取值范围。
 pub const MAX_LOCALITY: u8 = 5;
 pub fn reg_access(l: u8) -> u32 {
-    0x0000u32 + (l as u32) * 4096u32
+    (l as u32) * 4096u32
 }
 pub fn reg_sts(l: u8) -> u32 {
     0x0018u32 + (l as u32) * 4096u32

@@ -1,7 +1,7 @@
 use crate::{
     cursor::*,
     tpm1::{
-        msg::{HEADER_LEN, TAG_RQU_COMMAND, build_header1},
+        msg::{HEADER_LEN, build_header1},
         ord::{
             ORD_CONTINUE_SELF_TEST, ORD_EXTEND, ORD_GET_CAPABILITY, ORD_GET_RANDOM, ORD_PCR_READ,
             ORD_SAVE_STATE, ORD_STARTUP,

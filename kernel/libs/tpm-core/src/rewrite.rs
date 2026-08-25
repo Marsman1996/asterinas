@@ -44,10 +44,8 @@ pub fn map_command_handles(
     let mut i: usize = 0;
     while i < nr_handles {
         let h = read_be32(cmd, HEADER_SIZE + 4 * i);
-        if is_transient_exec(h) {
-            if tbl.resolve(h).is_none() {
-                return Err(SpaceErr::BadHandle);
-            }
+        if is_transient_exec(h) && tbl.resolve(h).is_none() {
+            return Err(SpaceErr::BadHandle);
         }
         i += 1;
     }
@@ -58,7 +56,6 @@ pub fn map_command_handles(
             let rh = tbl.resolve(h);
             let p = rh.unwrap();
             write_be32(cmd, HEADER_SIZE + 4 * i, p);
-        } else {
         }
         i += 1;
     }
@@ -146,7 +143,7 @@ pub fn map_capability_handles(
         return Ok(len);
     }
     let tail = len - CAP_HANDLES_OFF;
-    if tail % 4 != 0 {
+    if !tail.is_multiple_of(4) {
         return Err(SpaceErr::Malformed);
     }
     let avail: usize = tail / 4;
@@ -160,14 +157,12 @@ pub fn map_capability_handles(
     while i < count {
         let h = read_be32(rsp, CAP_HANDLES_OFF + 4 * i);
         if is_transient_exec(h) {
-            if h != 0 && h != CTX_SAVED_SENTINEL {
-                match tbl.lookup(h) {
-                    Some(v) => {
-                        write_be32(rsp, CAP_HANDLES_OFF + 4 * j, v);
-                        j += 1;
-                    }
-                    None => {}
-                }
+            if h != 0
+                && h != CTX_SAVED_SENTINEL
+                && let Some(v) = tbl.lookup(h)
+            {
+                write_be32(rsp, CAP_HANDLES_OFF + 4 * j, v);
+                j += 1;
             }
         } else {
             write_be32(rsp, CAP_HANDLES_OFF + 4 * j, h);

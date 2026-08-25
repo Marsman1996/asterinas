@@ -5,7 +5,7 @@ use crate::{
             CMD_MAX, SHA1_DIGEST_LEN, build_continue_selftest, build_get_random, build_getcap,
             build_pcr_extend, build_pcr_read, build_save_state, build_startup,
         },
-        msg::{HEADER_LEN, Parse1Error, RC_SUCCESS, parse_response1},
+        msg::{Parse1Error, RC_SUCCESS, parse_response1},
         rsp::{
             parse_cap_u32, parse_cap_u32_quad, parse_cap_u32_triple, parse_get_random,
             parse_pcr_read,
@@ -146,10 +146,7 @@ impl<P: TisPhy> Boot1<P> {
     /// 证明的性质,也是它相对「照抄一个 `while(1)`」的全部价值:器件卡在自检里
     /// 不退场时,本层等到轮数用尽就报超时,不会把调用方拖进无限等待。
     pub fn do_selftest(&mut self) -> Result<(), Boot1Err> {
-        let trc = match self.continue_selftest() {
-            Ok(v) => v,
-            Err(e) => return Err(e),
-        };
+        let trc = self.continue_selftest()?;
         if trc != RC_SUCCESS && trc != ERR_INVALID_POSTINIT {
             return Err(Boot1Err::Rc(trc));
         }
@@ -170,7 +167,7 @@ impl<P: TisPhy> Boot1<P> {
                 return Err(Boot1Err::Rc(rc));
             }
             self.nap();
-            loops = loops - 1;
+            loops -= 1;
         }
         Err(Boot1Err::SelfTestTimeout)
     }

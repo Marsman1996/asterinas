@@ -19,6 +19,12 @@ impl LiveSet {
     pub fn observe_load(&mut self, _h: u32) {}
     pub fn observe_flush(&mut self) {}
 }
+
+impl Default for LiveSet {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 pub struct ChipLink<P: TisPhy> {
     pub x: Xfer<P>,
     pub ledger: LiveSet,

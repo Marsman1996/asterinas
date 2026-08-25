@@ -112,7 +112,9 @@ fn cfb_apply(material: &[u8; CFB_MATERIAL_LEN], data: &mut [u8], encrypt: bool) 
 
     // 密钥在前、初始向量紧随其后,这个布局由 `crypto.rs` 的 `CFB_MATERIAL_LEN`
     // 定义,两处必须一起改。
-    debug_assert!(AES_KEY_LEN + AES_BLOCK_LEN == CFB_MATERIAL_LEN);
+    const {
+        debug_assert!(AES_KEY_LEN + AES_BLOCK_LEN == CFB_MATERIAL_LEN);
+    }
     let mut key = [0u8; AES_KEY_LEN];
     let mut iv = [0u8; AES_BLOCK_LEN];
     key.copy_from_slice(&material[..AES_KEY_LEN]);
@@ -151,6 +153,11 @@ pub struct ExtRng;
 impl ExtRng {
     pub fn new() -> Self {
         Self
+    }
+}
+impl Default for ExtRng {
+    fn default() -> Self {
+        Self::new()
     }
 }
 impl NonceSource for ExtRng {

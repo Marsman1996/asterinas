@@ -30,6 +30,15 @@ impl SpaceTable {
             sessions: [0u32; SLOTS],
         }
     }
+}
+
+impl Default for SpaceTable {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SpaceTable {
     /// 把槽位置为空闲或已保存。这两种状态不携带句柄，永远不破坏不变量。
     pub fn set_slot_free(&mut self, i: usize, saved: bool) {
         self.ctx[i] = if saved {

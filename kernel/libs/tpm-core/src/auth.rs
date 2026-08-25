@@ -50,22 +50,22 @@ pub fn auth_hmac<H: HmacSha256Ctx>(
     h.update(&tail[..]);
     h.finish()
 }
-pub fn rp_hash<S: Sha256Ctx>(rc: u32, ordinal: u32, parms: &[u8]) -> [u8; SHA256_LEN] {
+pub fn rp_hash<S: Sha256Ctx>(rc: u32, ordinal: u32, params: &[u8]) -> [u8; SHA256_LEN] {
     let mut s = S::new();
     let rc_b = be32_arr(rc);
     let ord_b = be32_arr(ordinal);
     s.update(&rc_b[..]);
     s.update(&ord_b[..]);
-    s.update(parms);
+    s.update(params);
     s.finish()
 }
 /// `names` 是各授权句柄名字的顺序拼接，由会话层准备。
-pub fn cp_hash<S: Sha256Ctx>(ordinal: u32, names: &[u8], parms: &[u8]) -> [u8; SHA256_LEN] {
+pub fn cp_hash<S: Sha256Ctx>(ordinal: u32, names: &[u8], params: &[u8]) -> [u8; SHA256_LEN] {
     let mut s = S::new();
     let ord_b = be32_arr(ordinal);
     s.update(&ord_b[..]);
     s.update(names);
-    s.update(parms);
+    s.update(params);
     s.finish()
 }
 /// 在 `out[off..]` 处铺开一个会话，HMAC 字段先留空。
@@ -91,7 +91,7 @@ pub fn write_cmd_session(
     let mut i: usize = 0;
     while i < NONCE_LEN {
         out[off + SESS_NONCE_OFF + i] = nonce[i];
-        i = i + 1;
+        i += 1;
     }
     out[off + SESS_ATTRS_OFF] = attrs;
     out[off + SESS_HMAC_SIZE_OFF] = n[0];
@@ -99,7 +99,7 @@ pub fn write_cmd_session(
     let mut j: usize = 0;
     while j < NONCE_LEN {
         out[off + SESS_HMAC_OFF + j] = 0;
-        j = j + 1;
+        j += 1;
     }
 }
 /// 把算好的 MAC 填进占位处。
@@ -107,7 +107,7 @@ pub fn patch_hmac(out: &mut [u8], off: usize, mac: &[u8; SHA256_LEN]) {
     let mut i: usize = 0;
     while i < SHA256_LEN {
         out[off + SESS_HMAC_OFF + i] = mac[i];
-        i = i + 1;
+        i += 1;
     }
 }
 /// 一条响应里与本会话有关的位置信息。
@@ -117,9 +117,9 @@ pub fn patch_hmac(out: &mut [u8], off: usize, mac: &[u8; SHA256_LEN]) {
 #[derive(Clone, Copy)]
 pub struct RspAuth {
     /// 参数区起点。
-    pub parm_off: usize,
+    pub param_off: usize,
     /// 参数区长度。
-    pub parm_len: usize,
+    pub param_len: usize,
     /// 本会话 nonce 字段起点。
     pub nonce_off: usize,
     /// 本会话 HMAC 字段起点。
@@ -136,7 +136,7 @@ fn read_nonce(raw: &[u8], off: usize) -> [u8; NONCE_LEN] {
     let mut i: usize = 0;
     while i < NONCE_LEN {
         out[i] = raw[off + i];
-        i = i + 1;
+        i += 1;
     }
     out
 }
@@ -179,16 +179,16 @@ pub fn parse_rsp_auth(raw: &[u8], rhandles: usize, index: usize) -> Result<RspAu
     if !c.skip(raw, rhandles * 4) {
         return Err(AuthErr::Malformed);
     }
-    let parm_len_u32 = match c.read_be32(raw) {
+    let param_len_u32 = match c.read_be32(raw) {
         Some(v) => v,
         None => return Err(AuthErr::Malformed),
     };
-    if parm_len_u32 as usize > raw.len() {
+    if param_len_u32 as usize > raw.len() {
         return Err(AuthErr::Malformed);
     }
-    let parm_len = parm_len_u32 as usize;
-    let parm_off = c.pos;
-    if !c.skip(raw, parm_len) {
+    let param_len = param_len_u32 as usize;
+    let param_off = c.pos;
+    if !c.skip(raw, param_len) {
         return Err(AuthErr::Malformed);
     }
     let mut i: usize = 0;
@@ -210,7 +210,7 @@ pub fn parse_rsp_auth(raw: &[u8], rhandles: usize, index: usize) -> Result<RspAu
         if !c.skip(raw, hl as usize) {
             return Err(AuthErr::Malformed);
         }
-        i = i + 1;
+        i += 1;
     }
     let nonce_len = match c.read_be16(raw) {
         Some(v) => v,
@@ -243,16 +243,16 @@ pub fn parse_rsp_auth(raw: &[u8], rhandles: usize, index: usize) -> Result<RspAu
     if hmac_end != raw.len() {
         return Err(AuthErr::Malformed);
     }
-    let parm_end = match parm_off.checked_add(parm_len) {
+    let param_end = match param_off.checked_add(param_len) {
         Some(v) => v,
         None => return Err(AuthErr::Malformed),
     };
-    if parm_end > nonce_off {
+    if param_end > nonce_off {
         return Err(AuthErr::Malformed);
     }
     Ok(RspAuth {
-        parm_off,
-        parm_len,
+        param_off,
+        param_len,
         nonce_off,
         hmac_off,
         attrs,
@@ -267,8 +267,8 @@ pub fn ct_eq32(a: &[u8; SHA256_LEN], b: &[u8]) -> bool {
     let mut acc: u8 = 0;
     let mut i: usize = 0;
     while i < SHA256_LEN {
-        acc = acc | (a[i] ^ b[i]);
-        i = i + 1;
+        acc |= a[i] ^ b[i];
+        i += 1;
     }
     acc == 0
 }

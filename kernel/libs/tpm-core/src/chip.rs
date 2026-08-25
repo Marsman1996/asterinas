@@ -2,7 +2,7 @@ use crate::{
     cmd::{CC_CONTEXT_LOAD, CC_CONTEXT_SAVE, CC_FLUSH_CONTEXT},
     module::{ContextIo, IoErr},
     msg::{ST_NO_SESSIONS, build_header},
-    rewrite::{HEADER_SIZE, read_be32, write_be32},
+    rewrite::{HEADER_SIZE, read_be32},
 };
 
 pub const RC_SUCCESS: u32 = 0x0000_0000;
@@ -12,8 +12,8 @@ pub const RC_FMT1_BIT: u32 = 0x0000_0080;
 /// TPM Format-1 返回码中的 selector bits：
 /// - bit 6 (`TPM_RC_P`) 表示参数选择器；
 /// - bits 8..11 (`TPM_RC_N`) 表示对象 / 会话编号；
-/// 这两部分必须在分类前清掉，否则 `TPM_RC_HANDLE | P | N` 会被误判成
-/// 另一个错误码。
+///   这两部分必须在分类前清掉，否则 `TPM_RC_HANDLE | P | N` 会被误判成
+///   另一个错误码。
 pub const RC_FMT1_MASK: u32 = 0x0000_00BF;
 pub const RC_HANDLE: u32 = 0x0000_008B;
 pub const RC_INTEGRITY: u32 = 0x0000_009F;

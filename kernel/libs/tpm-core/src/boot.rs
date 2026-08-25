@@ -1,9 +1,6 @@
 use crate::{
     chip::MSG_MAX,
-    cmd::{
-        CAP_TPM_PROPERTIES, CC_GET_CAPABILITY, CC_SELF_TEST, CC_SHUTDOWN, CC_STARTUP, SU_CLEAR,
-        SU_STATE,
-    },
+    cmd::{CAP_TPM_PROPERTIES, CC_GET_CAPABILITY, CC_SELF_TEST, CC_SHUTDOWN, CC_STARTUP},
     cursor::{be16_bytes, be32_bytes},
     msg::{ParseError, RC_SUCCESS, ST_NO_SESSIONS, TPM_HEADER_LEN, build_header, parse_response},
     phy::TisPhy,
@@ -229,22 +226,10 @@ impl<P: TisPhy> Boot<P> {
     /// 于是分片 / 截断 / 跳过」的路径，而那条路径在容量充足的机器上永远不会
     /// 被执行到，也就永远不会被测到。宁可在这里拒绝加载。
     pub fn probe_limits(&mut self) -> Result<Limits, BootErr> {
-        let max_command = match self.property(PT_MAX_COMMAND_SIZE) {
-            Ok(v) => v,
-            Err(e) => return Err(e),
-        };
-        let max_response = match self.property(PT_MAX_RESPONSE_SIZE) {
-            Ok(v) => v,
-            Err(e) => return Err(e),
-        };
-        let max_object_context = match self.property(PT_MAX_OBJECT_CONTEXT) {
-            Ok(v) => v,
-            Err(e) => return Err(e),
-        };
-        let max_session_context = match self.property(PT_MAX_SESSION_CONTEXT) {
-            Ok(v) => v,
-            Err(e) => return Err(e),
-        };
+        let max_command = self.property(PT_MAX_COMMAND_SIZE)?;
+        let max_response = self.property(PT_MAX_RESPONSE_SIZE)?;
+        let max_object_context = self.property(PT_MAX_OBJECT_CONTEXT)?;
+        let max_session_context = self.property(PT_MAX_SESSION_CONTEXT)?;
         if max_response as usize > MSG_MAX {
             return Err(BootErr::Capacity);
         }
@@ -295,9 +280,6 @@ pub fn bring_up<P: TisPhy>(
         Ok(()) => {}
         Err(e) => return Err(e),
     }
-    let lim = match b.probe_limits() {
-        Ok(v) => v,
-        Err(e) => return Err(e),
-    };
+    let lim = b.probe_limits()?;
     Ok((b.finish(), lim))
 }

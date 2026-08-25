@@ -143,9 +143,9 @@ pub fn parse_pcr_allocation(body: &[u8]) -> Result<PcrBanks, ParseError> {
         if any_nonzero(select) {
             banks.algs[banks.count] = alg_id;
             banks.digest_sizes[banks.count] = digest_size_of(alg_id);
-            banks.count = banks.count + 1;
+            banks.count += 1;
         }
-        i = i + 1;
+        i += 1;
     }
     Ok(banks)
 }

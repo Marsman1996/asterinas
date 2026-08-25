@@ -1,7 +1,6 @@
 use crate::{
     chip::CtxIo,
     link::{ChipLink, LiveSet},
-    module::ContextIo,
     phy::TisPhy,
     secure::Guarded,
     session::AuthSession,
@@ -53,11 +52,7 @@ pub fn close_ctx<P: TisPhy>(io: CtxIo<ChipLink<P>>) -> ChipLink<P> {
 /// 就落在账本管辖的区间里，而当时没人记账。调用纪律只有这一条，代价是授权
 /// 阶段与上下文换入换出不能交错——需要交错时，先 [`to_plain`] 回来。
 pub fn to_auth<P: TisPhy>(link: ChipLink<P>, sess: AuthSession) -> (Guarded<P>, LiveSet) {
-    #[allow(non_shorthand_field_patterns)]
-    let ChipLink {
-        x: x,
-        ledger: ledger,
-    } = link;
+    let ChipLink { x, ledger } = link;
     (Guarded::new(x, sess), ledger)
 }
 /// 离开受保护的往返阶段，把链路与停放的账本重新接回一起。

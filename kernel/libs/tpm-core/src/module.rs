@@ -1,4 +1,3 @@
-use crate::{handle::*, table::*};
 pub use crate::{
     handle::{
         SLOTS, is_session_exec as is_session, is_transient_exec as is_transient,
@@ -65,6 +64,15 @@ impl Space {
             tbl: SpaceTable::new(),
         }
     }
+}
+
+impl Default for Space {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Space {
     /// 取一份工作副本。使用者可见的状态在此期间保持不变。
     pub fn begin(&self) -> Transaction {
         Transaction { work: self.tbl }
@@ -138,7 +146,7 @@ pub fn load_space<I: ContextIo>(
             CtxSlot::Saved => match io.load(ctx_buf, off) {
                 Ok((h, used)) => {
                     tbl.set_slot_live(i, h);
-                    off = off + used;
+                    off += used;
                 }
                 Err(e) => {
                     flush_all(tbl, io);
@@ -158,7 +166,7 @@ pub fn load_space<I: ContextIo>(
                         flush_all(tbl, io);
                         return Err(IoErr::Integrity);
                     }
-                    off = off + used;
+                    off += used;
                 }
                 Err(IoErr::NotFound) => {
                     tbl.clear_session(i);
@@ -186,12 +194,12 @@ pub fn save_space<I: ContextIo>(
     let mut i: usize = 0;
     let mut off: usize = 0;
     while i < SLOTS {
-        match tbl.slot_at(i) {
-            CtxSlot::Live(h) => match io.save(h, ctx_buf, off) {
+        if let CtxSlot::Live(h) = tbl.slot_at(i) {
+            match io.save(h, ctx_buf, off) {
                 Ok(used) => {
                     io.flush(h);
                     tbl.set_slot_free(i, true);
-                    off = off + used;
+                    off += used;
                 }
                 Err(IoErr::NotFound) => {
                     tbl.set_slot_free(i, false);
@@ -200,8 +208,7 @@ pub fn save_space<I: ContextIo>(
                     flush_all(tbl, io);
                     return Err(e);
                 }
-            },
-            _ => {}
+            }
         }
         i += 1;
     }
@@ -212,7 +219,7 @@ pub fn save_space<I: ContextIo>(
         if h != 0 {
             match io.save(h, ses_buf, off) {
                 Ok(used) => {
-                    off = off + used;
+                    off += used;
                 }
                 Err(IoErr::NotFound) => {
                     tbl.clear_session(i);

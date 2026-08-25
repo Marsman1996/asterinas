@@ -43,12 +43,12 @@ impl AuthSession {
         let mut i: usize = 0;
         while i < SHA256_LEN {
             buf[i] = self.session_key[i];
-            i = i + 1;
+            i += 1;
         }
         let mut j: usize = 0;
         while j < self.passphrase_len {
             buf[SHA256_LEN + j] = self.passphrase[j];
-            j = j + 1;
+            j += 1;
         }
         (buf, SHA256_LEN + self.passphrase_len)
     }
@@ -84,12 +84,12 @@ impl AuthSession {
     pub fn set_passphrase(&mut self, pw: &[u8]) {
         let mut n = pw.len();
         while n > 0 && pw[n - 1] == 0 {
-            n = n - 1;
+            n -= 1;
         }
         let mut i: usize = 0;
         while i < n {
             self.passphrase[i] = pw[i];
-            i = i + 1;
+            i += 1;
         }
         self.passphrase_len = n;
     }
@@ -122,11 +122,11 @@ impl AuthSession {
         sess_off: usize,
         index: usize,
         names: &[u8],
-        parm_off: usize,
-        parm_len: usize,
+        param_off: usize,
+        param_len: usize,
     ) {
-        let parms = &buf[parm_off..parm_off + parm_len];
-        let cph = cp_hash::<S>(self.ordinal, names, parms);
+        let params = &buf[param_off..param_off + param_len];
+        let cph = cp_hash::<S>(self.ordinal, names, params);
         let (kb, klen) = self.key_buf();
         let key = &kb[..][0..klen];
         let mac = auth_hmac::<H>(key, &cph, &self.our_nonce, &self.tpm_nonce, self.attrs);
@@ -163,15 +163,15 @@ impl AuthSession {
                 return Err(e);
             }
         };
-        let parm_end = match a.parm_off.checked_add(a.parm_len) {
+        let param_end = match a.param_off.checked_add(a.param_len) {
             Some(v) => v,
             None => {
                 self.state = SessionState::Closed;
                 return Err(AuthErr::Malformed);
             }
         };
-        let parms = &raw[a.parm_off..parm_end];
-        let rph = rp_hash::<S>(0, self.ordinal, parms);
+        let params = &raw[a.param_off..param_end];
+        let rph = rp_hash::<S>(0, self.ordinal, params);
         let (kb, klen) = self.key_buf();
         let key = &kb[..][0..klen];
         let expect = auth_hmac::<H>(key, &rph, &a.tpm_nonce, &self.our_nonce, self.attrs);
@@ -211,11 +211,11 @@ pub fn cfb_material<H: HmacSha256Ctx>(
     kdfa32::<H>(key, &LABEL_CFB[..], &newer[..], &older[..])
 }
 /// 原地加密命令的首个参数。必须在 [`AuthSession::finalize`] 之前调用。
-pub fn encrypt_parm<A: AesCfb>(aes: &A, material: &[u8; CFB_MATERIAL_LEN], parm: &mut [u8]) {
-    aes.encrypt(material, parm);
+pub fn encrypt_param<A: AesCfb>(aes: &A, material: &[u8; CFB_MATERIAL_LEN], param: &mut [u8]) {
+    aes.encrypt(material, param);
 }
 /// 原地解密响应的首个参数。必须在 [`AuthSession::check_response`] 返回 `Ok` 之后
 /// 调用——对未经校验的字节做解密，等于把对端塞进来的任意数据当成明文交给上层。
-pub fn decrypt_parm<A: AesCfb>(aes: &A, material: &[u8; CFB_MATERIAL_LEN], parm: &mut [u8]) {
-    aes.decrypt(material, parm);
+pub fn decrypt_param<A: AesCfb>(aes: &A, material: &[u8; CFB_MATERIAL_LEN], param: &mut [u8]) {
+    aes.decrypt(material, param);
 }

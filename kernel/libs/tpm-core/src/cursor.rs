@@ -20,6 +20,15 @@ impl Cursor {
     pub fn new() -> Cursor {
         Cursor { pos: 0 }
     }
+}
+
+impl Default for Cursor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Cursor {
     /// 从指定偏移开始解析（用于跳过已由上层校验过的固定前缀）。
     pub fn at(pos: usize) -> Cursor {
         Cursor { pos }
@@ -34,7 +43,7 @@ impl Cursor {
     pub fn read_u8(&mut self, data: &[u8]) -> Option<u8> {
         if self.pos < data.len() {
             let v = data[self.pos];
-            self.pos = self.pos + 1;
+            self.pos += 1;
             Some(v)
         } else {
             None
@@ -45,7 +54,7 @@ impl Cursor {
         if n >= 2 && self.pos <= n - 2 {
             let hi = data[self.pos];
             let lo = data[self.pos + 1];
-            self.pos = self.pos + 2;
+            self.pos += 2;
             Some(hi as u16 * 256 + lo as u16)
         } else {
             None
@@ -58,7 +67,7 @@ impl Cursor {
             let b1 = data[self.pos + 1];
             let b2 = data[self.pos + 2];
             let b3 = data[self.pos + 3];
-            self.pos = self.pos + 4;
+            self.pos += 4;
             Some(b0 as u32 * 16777216 + b1 as u32 * 65536 + b2 as u32 * 256 + b3 as u32)
         } else {
             None
@@ -82,7 +91,7 @@ impl Cursor {
     pub fn skip(&mut self, data: &[u8], n: usize) -> bool {
         let len = data.len();
         if n <= len && self.pos <= len - n {
-            self.pos = self.pos + n;
+            self.pos += n;
             true
         } else {
             false
@@ -99,7 +108,7 @@ pub fn any_nonzero(s: &[u8]) -> bool {
         if s[i] != 0 {
             return true;
         }
-        i = i + 1;
+        i += 1;
     }
     false
 }

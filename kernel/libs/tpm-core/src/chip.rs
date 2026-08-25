@@ -9,6 +9,12 @@ pub const RC_SUCCESS: u32 = 0x0000_0000;
 /// 位 7 置位表示「格式一」返回码：低 6 位是错误号，位 8..11 是出错的
 /// 句柄 / 参数 / 会话序号。分类时必须先把序号位抹掉。
 pub const RC_FMT1_BIT: u32 = 0x0000_0080;
+/// TPM Format-1 返回码中的 selector bits：
+/// - bit 6 (`TPM_RC_P`) 表示参数选择器；
+/// - bits 8..11 (`TPM_RC_N`) 表示对象 / 会话编号；
+/// 这两部分必须在分类前清掉，否则 `TPM_RC_HANDLE | P | N` 会被误判成
+/// 另一个错误码。
+pub const RC_FMT1_MASK: u32 = 0x0000_00BF;
 pub const RC_HANDLE: u32 = 0x0000_008B;
 pub const RC_INTEGRITY: u32 = 0x0000_009F;
 pub const RC_CONTEXT_GAP: u32 = 0x0000_0901;
@@ -21,7 +27,7 @@ pub const RC_TESTING: u32 = 0x0000_090A;
 pub const RC_RETRY: u32 = 0x0000_0922;
 pub fn rc_value(rc: u32) -> u32 {
     if rc & RC_FMT1_BIT == RC_FMT1_BIT {
-        rc & 0xFFu32
+        rc & RC_FMT1_MASK
     } else {
         rc
     }

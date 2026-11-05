@@ -1,0 +1,32 @@
+Cargo.lock
+  h_fddbafe85ec91e 431,435,536-541,667-672,732-743,838-847,889-907,963-972,1011,1059-1069,1140-1148,1626-1635,1706-1714,1778,1788,1791-1796,1899-1911,2438-2443
+kernel/core/comps/tpm/Cargo.toml
+  h_fddbafe85ec91e 12,16
+kernel/core/comps/tpm/src/device.rs
+  h_fddbafe85ec91e 3,8,10,13,17,19,26-27,29-32,36-37,40,50-59,83,87,102,121,123,152,162,164-165,183,243,245,249,252,254,257,260
+kernel/core/comps/tpm/src/extcrypto.rs
+  h_fddbafe85ec91e 3-9,11-12,15-16,19,21,23,25,27,30-32,35,37,39,41,43,46-48,51,53,55,59-61,64,66-68,71-72,74-76
+kernel/core/comps/tpm/src/lib.rs
+  h_fddbafe85ec91e 17-25,29,31-36
+kernel/core/comps/tpm/src/mmio.rs
+  h_fddbafe85ec91e 13,19
+kernel/core/comps/tpm/src/random.rs
+  h_fddbafe85ec91e 1-567
+kernel/core/comps/tpm/src/space_io.rs
+  h_fddbafe85ec91e 9,18-20,23-24,27,34,37,54,65,96,168
+kernel/core/src/device/misc/hwrng.rs
+  h_fddbafe85ec91e 6,20-23,32,92-95,160,168-171,176-245
+test/initramfs/src/regression/device/hwrng.c
+  h_fddbafe85ec91e 13,20,39,48-49,156-197,282-283,286-289,291-301,366-371
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "e8bc074a174191390eadec86b0226413b81dffa1",
+  "prompts": {},
+  "humans": {
+    "h_fddbafe85ec91e": {
+      "author": "Marsman1996 <lqliuyuwei@outlook.com>"
+    }
+  }
+}

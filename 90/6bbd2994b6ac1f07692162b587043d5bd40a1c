@@ -1,0 +1,14 @@
+kernel/core/src/device/tty/vt/driver.rs
+  h_fddbafe85ec91e 66
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "906bbd2994b6ac1f07692162b587043d5bd40a1c",
+  "prompts": {},
+  "humans": {
+    "h_fddbafe85ec91e": {
+      "author": "Marsman1996 <lqliuyuwei@outlook.com>"
+    }
+  }
+}

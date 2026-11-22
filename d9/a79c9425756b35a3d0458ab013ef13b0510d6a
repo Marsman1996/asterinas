@@ -1,0 +1,16 @@
+kernel/core/src/device/tty/vt/driver.rs
+  h_fddbafe85ec91e 66
+test/initramfs/src/regression/device/vt/vt_ioctl.c
+  h_fddbafe85ec91e 9,151-166
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "d9a79c9425756b35a3d0458ab013ef13b0510d6a",
+  "prompts": {},
+  "humans": {
+    "h_fddbafe85ec91e": {
+      "author": "Marsman1996 <lqliuyuwei@outlook.com>"
+    }
+  }
+}
